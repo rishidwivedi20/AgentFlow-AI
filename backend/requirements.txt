@@ -1,13 +1,21 @@
-# OrchestrAI backend - runtime dependencies (Phase 1)
+# OrchestrAI backend - runtime dependencies
 # Pinned to exact versions for reproducible student/portfolio setups.
 
+# --- Web framework (Phase 1) ---
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.3
 
-# Phase 2 (LangGraph MVP) - installed when we get there:
-#   langgraph==1.2.11
-#   google-genai
-#   groq
+# --- Orchestration (Phase 2) ---
+# Pulls langchain-core (>=1.4.7,<2) transitively. That is the only LangChain
+# package in the project and nothing imports from it directly.
+langgraph==1.2.11
+
+# --- LLM provider (Phase 2) ---
+# Single provider by design. Chosen for native structured output
+# (response_schema + response.parsed) and real usage_metadata token counts.
+# A second provider would be added as another adapter behind LLMProvider,
+# never as a direct import inside an agent.
+google-genai==2.20.0

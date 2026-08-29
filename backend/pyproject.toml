@@ -12,6 +12,15 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]  # re-exports are intentional
+"tests/**" = ["ANN"]         # test fns need no annotations to be readable
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Async tests are collected without needing an @pytest.mark.asyncio on each one.
+asyncio_mode = "auto"
+# Every test runs on its own event loop; no state leaks between tests.
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"

@@ -1,3 +1,11 @@
 -r requirements.txt
 
 ruff==0.16.5
+
+# --- Testing (Phase 2) ---
+# Starlette 1.6's TestClient deprecates httpx in favour of httpx2 and warns
+# when it falls back to the former. httpx itself stays in the tree as a
+# runtime dependency of google-genai; it is not pinned here.
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx2==2.12.0
