@@ -1,0 +1,13 @@
+# OrchestrAI backend - runtime dependencies (Phase 1)
+# Pinned to exact versions for reproducible student/portfolio setups.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+
+# Phase 2 (LangGraph MVP) - installed when we get there:
+#   langgraph==1.2.11
+#   google-genai
+#   groq
