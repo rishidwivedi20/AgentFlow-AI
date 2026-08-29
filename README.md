@@ -12,15 +12,16 @@ conditional routing, feedback loops, observability, and evaluation.
 
 ## Status
 
-**Phase 1 (foundation) — complete.** Backend and frontend boot, share a
-validated configuration layer, and communicate over a health endpoint.
-No agents exist yet.
+**Phase 2 (LangGraph MVP) — complete.** A stateful Writer ↔ Editor graph runs
+behind `POST /api/workflows/run`, with conditional routing, a hard revision cap,
+structured LLM output, per-agent metrics and graceful failure handling.
+Verified end to end against the live Gemini API.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | 1 | FastAPI + React foundation, config, health check | ✅ done |
-| 2 | LangGraph MVP: Researcher → Writer ↔ Editor, max 3 revisions | next |
-| 3 | Real research, Content Planner, Fact Checker, source tracking | planned |
+| 2 | LangGraph MVP: Writer ↔ Editor loop, max 3 revisions | ✅ done |
+| 3 | Real research, Content Planner, Fact Checker, source tracking | next |
 | 4 | SSE streaming, React Flow visualisation, live activity log | planned |
 | 5 | Latency, token usage, revision and workflow metrics | planned |
 | 6 | Single-agent baseline vs multi-agent comparison | planned |
@@ -69,6 +70,28 @@ npm run dev
 - Frontend: http://localhost:5173
 - API docs: http://localhost:8000/docs
 
+### Running a workflow
+
+```powershell
+curl -X POST http://localhost:8000/api/workflows/run `
+  -H "Content-Type: application/json" `
+  -d '{"topic":"How AI is changing software engineering","platform":"linkedin","tone":"professional","number_of_posts":2}'
+```
+
+Returns HTTP 200 with the generated posts, the Editor's verdict, the revision
+count and per-agent metrics. A run that executes but fails also returns 200,
+carrying `workflow_status` and structured `errors`; non-2xx is reserved for
+invalid input (422) and unusable configuration (503).
+
+### Tests
+
+```powershell
+cd backend; .venv\Scripts\python.exe -m pytest tests/
+```
+
+103 tests, no network calls and no API key required - the LLM provider is
+stubbed throughout.
+
 ## Configuration
 
 All configuration is environment-driven. `backend/app/core/config.py` is the
@@ -82,6 +105,7 @@ validated `Settings` object.
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |
 | `LLM_PROVIDER` | `gemini` | `gemini` or `groq` |
 | `GEMINI_API_KEY` | — | [aistudio.google.com](https://aistudio.google.com/apikey), free tier |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | `gemini-2.5-flash` is closed to new API keys |
 | `GROQ_API_KEY` | — | [console.groq.com](https://console.groq.com), free tier |
 | `MAX_REVISIONS` | `3` | Hard cap on Writer ↔ Editor cycles |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-call provider timeout |

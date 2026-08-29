@@ -14,6 +14,10 @@ ignore = [
 "**/__init__.py" = ["F401"]  # re-exports are intentional
 "tests/**" = ["ANN"]         # test fns need no annotations to be readable
 
+[tool.ruff.lint.isort]
+# `tests` is first-party too; without this its imports sort as third-party.
+known-first-party = ["app", "tests"]
+
 [tool.ruff.format]
 quote-style = "double"
 

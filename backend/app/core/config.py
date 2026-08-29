@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # --- LLM provider (Phase 2+) ------------------------------------------
     llm_provider: ProviderName = "gemini"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 

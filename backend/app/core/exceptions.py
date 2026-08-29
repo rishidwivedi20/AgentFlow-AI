@@ -49,6 +49,19 @@ class LLMProviderError(OrchestrAIError):
     error_type = "llm_provider_error"
 
 
+class LLMRateLimitError(LLMProviderError):
+    """The provider refused the request because a rate or quota limit was hit.
+
+    Kept distinct from a generic provider failure because the caller's response
+    is different: wait or reduce load, rather than investigate a fault. Not
+    retried - on a free tier a 429 usually means the per-minute or per-day quota
+    is spent, and an immediate retry burns another request to learn that again.
+    """
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    error_type = "rate_limited"
+
+
 class LLMTimeoutError(OrchestrAIError):
     """The LLM provider did not respond within the configured timeout."""
 
@@ -109,7 +122,7 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
         for err in exc.errors()
     ]
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=_envelope("validation_error", "Request validation failed", {"fields": fields}),
     )
 
