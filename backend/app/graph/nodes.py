@@ -19,6 +19,7 @@ from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import DraftRecord
 from app.models.enums import AgentName, WorkflowStatus
 from app.models.factcheck import VerificationStatus
+from app.services.event_bus import EventEmitter
 from app.services.llm_service import LLMService
 from app.services.metrics_service import AgentRunResult, GraphNode, StateUpdate, as_node
 from app.services.research_service import ResearchService
@@ -26,7 +27,9 @@ from app.services.research_service import ResearchService
 logger = logging.getLogger(__name__)
 
 
-def build_researcher_node(llm: LLMService, research: ResearchService) -> GraphNode:
+def build_researcher_node(
+    llm: LLMService, research: ResearchService, emitter: EventEmitter | None = None
+) -> GraphNode:
     """Researcher node: search the topic and extract cited facts."""
 
     async def handler(state: WorkflowState) -> AgentRunResult:
@@ -42,10 +45,10 @@ def build_researcher_node(llm: LLMService, research: ResearchService) -> GraphNo
             usage=llm_result.usage if llm_result else None,
         )
 
-    return as_node(AgentName.RESEARCHER, handler)
+    return as_node(AgentName.RESEARCHER, handler, emitter)
 
 
-def build_planner_node(llm: LLMService) -> GraphNode:
+def build_planner_node(llm: LLMService, emitter: EventEmitter | None = None) -> GraphNode:
     """Planner node: assign each post a distinct angle."""
 
     async def handler(state: WorkflowState) -> AgentRunResult:
@@ -64,10 +67,10 @@ def build_planner_node(llm: LLMService) -> GraphNode:
         )
         return AgentRunResult(update={"content_plan": result.value}, usage=result.usage)
 
-    return as_node(AgentName.PLANNER, handler)
+    return as_node(AgentName.PLANNER, handler, emitter)
 
 
-def build_writer_node(llm: LLMService) -> GraphNode:
+def build_writer_node(llm: LLMService, emitter: EventEmitter | None = None) -> GraphNode:
     """Writer node: produce a draft, advancing the revision counter."""
 
     async def handler(state: WorkflowState) -> AgentRunResult:
@@ -103,10 +106,10 @@ def build_writer_node(llm: LLMService) -> GraphNode:
             usage=result.usage,
         )
 
-    return as_node(AgentName.WRITER, handler)
+    return as_node(AgentName.WRITER, handler, emitter)
 
 
-def build_editor_node(llm: LLMService) -> GraphNode:
+def build_editor_node(llm: LLMService, emitter: EventEmitter | None = None) -> GraphNode:
     """Editor node: evaluate the current draft and record it with its verdict."""
 
     async def handler(state: WorkflowState) -> AgentRunResult:
@@ -138,10 +141,10 @@ def build_editor_node(llm: LLMService) -> GraphNode:
             usage=result.usage,
         )
 
-    return as_node(AgentName.EDITOR, handler)
+    return as_node(AgentName.EDITOR, handler, emitter)
 
 
-def build_fact_checker_node(llm: LLMService) -> GraphNode:
+def build_fact_checker_node(llm: LLMService, emitter: EventEmitter | None = None) -> GraphNode:
     """Fact Checker node: judge the approved draft's claims against research."""
 
     async def handler(state: WorkflowState) -> AgentRunResult:
@@ -171,10 +174,10 @@ def build_fact_checker_node(llm: LLMService) -> GraphNode:
             usage=result.usage,
         )
 
-    return as_node(AgentName.FACT_CHECKER, handler)
+    return as_node(AgentName.FACT_CHECKER, handler, emitter)
 
 
-def build_finalize_node() -> GraphNode:
+def build_finalize_node(emitter: EventEmitter | None = None) -> GraphNode:
     """Finalize node: choose the output and assign a terminal status.
 
     Makes no LLM call, so it reports no token usage.
@@ -183,7 +186,7 @@ def build_finalize_node() -> GraphNode:
     async def handler(state: WorkflowState) -> AgentRunResult:
         return AgentRunResult(update=_finalize(state))
 
-    return as_node(AgentName.FINALIZE, handler)
+    return as_node(AgentName.FINALIZE, handler, emitter)
 
 
 def _finalize(state: WorkflowState) -> StateUpdate:

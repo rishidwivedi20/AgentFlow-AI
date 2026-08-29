@@ -5,6 +5,7 @@ can evolve independently of the orchestration graph's internals.
 """
 
 from app.schemas.health import HealthChecks, HealthResponse, HealthStatus
+from app.schemas.run import RunAcceptedResponse, RunStatusResponse
 from app.schemas.workflow import (
     WorkflowRunRequest,
     WorkflowRunResponse,
@@ -15,6 +16,8 @@ __all__ = [
     "HealthChecks",
     "HealthResponse",
     "HealthStatus",
+    "RunAcceptedResponse",
+    "RunStatusResponse",
     "WorkflowRunRequest",
     "WorkflowRunResponse",
     "build_workflow_response",

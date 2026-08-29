@@ -6,10 +6,15 @@ Every route module is mounted here; ``main`` includes only ``api_router``.
 from fastapi import APIRouter
 
 from app.routes.health import router as health_router
+from app.routes.runs import router as runs_router
 from app.routes.workflows import router as workflows_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health_router)
 api_router.include_router(workflows_router, prefix="/workflows")
+# Async run endpoints share the /workflows prefix. Mounted after the
+# synchronous router so its literal "/run" path is matched before the
+# "/{run_id}" pattern here would swallow it.
+api_router.include_router(runs_router, prefix="/workflows")
 
 __all__ = ["api_router"]

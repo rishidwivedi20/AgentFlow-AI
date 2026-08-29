@@ -22,7 +22,9 @@ from app.core.exceptions import OrchestrAIError
 from app.graph.state import WorkflowState
 from app.models.enums import AgentName, AgentStatus
 from app.models.errors import WorkflowErrorRecord
+from app.models.events import EventType
 from app.models.metrics import AgentMetric, TokenUsage
+from app.services.event_bus import EventEmitter, NullEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,10 @@ def _build_metric(
 
 
 async def run_agent_with_metrics(
-    agent: AgentName, handler: AgentHandler, state: WorkflowState
+    agent: AgentName,
+    handler: AgentHandler,
+    state: WorkflowState,
+    emitter: EventEmitter | None = None,
 ) -> StateUpdate:
     """Execute ``handler``, returning its update plus a metric for the run.
 
@@ -79,17 +84,27 @@ async def run_agent_with_metrics(
     record rather than raising. Nothing is swallowed: the full traceback is
     logged, and the client-safe message reaches the caller through state.
     """
+    events = emitter or NullEmitter()
     started_at = datetime.now(UTC)
     started = perf_counter()
     # Ordered append reducer means the current length is this execution's index.
     sequence = len(state["agent_metrics"])
+
+    # The execution index is what lets a client tell the Writer's first pass
+    # from its third, which is what makes the feedback loop drawable.
+    await events.emit(
+        EventType.AGENT_STARTED,
+        agent=agent,
+        status=AgentStatus.RUNNING,
+        agent_execution=sequence,
+    )
 
     try:
         result = await handler(state)
     except OrchestrAIError as exc:
         # Expected domain failures: LLM provider errors, timeouts, invalid
         # agent output. Message is already client-safe.
-        return _failure_update(
+        return await _failure_update(
             agent,
             sequence,
             started_at,
@@ -97,11 +112,12 @@ async def run_agent_with_metrics(
             exc.error_type,
             exc.message,
             exc,
+            events,
         )
     except Exception as exc:  # noqa: BLE001 - deliberate boundary
         # Unexpected failures must not escape into FastAPI as a 500. Log the
         # traceback; return a generic message so no internals reach the client.
-        return _failure_update(
+        return await _failure_update(
             agent,
             sequence,
             started_at,
@@ -109,6 +125,7 @@ async def run_agent_with_metrics(
             "internal_error",
             f"The {agent.value} agent failed unexpectedly.",
             exc,
+            events,
         )
 
     metric = _build_metric(
@@ -127,10 +144,18 @@ async def run_agent_with_metrics(
             "total_tokens": result.usage.total_tokens if result.usage else None,
         },
     )
+    await events.emit(
+        EventType.AGENT_COMPLETED,
+        agent=agent,
+        status=AgentStatus.COMPLETED,
+        agent_execution=sequence,
+        latency_seconds=metric.latency_seconds,
+        usage=metric.usage,
+    )
     return {**result.update, "agent_metrics": [metric]}
 
 
-def _failure_update(
+async def _failure_update(
     agent: AgentName,
     sequence: int,
     started_at: datetime,
@@ -138,12 +163,24 @@ def _failure_update(
     error_type: str,
     message: str,
     exc: BaseException,
+    events: EventEmitter,
 ) -> StateUpdate:
     """Convert an exception into state: a failed metric and an error record."""
     logger.exception(
         "Agent failed",
         extra={"agent": agent.value, "error_type": error_type},
         exc_info=exc,
+    )
+    # The failure reaches the client as a typed event, not a stack trace. The
+    # traceback stays in the log above.
+    await events.emit(
+        EventType.AGENT_FAILED,
+        agent=agent,
+        status=AgentStatus.FAILED,
+        agent_execution=sequence,
+        latency_seconds=round(elapsed, 4),
+        error_type=error_type,
+        message=message,
     )
     return {
         "agent_metrics": [
@@ -167,11 +204,13 @@ def _failure_update(
     }
 
 
-def as_node(agent: AgentName, handler: AgentHandler) -> GraphNode:
+def as_node(
+    agent: AgentName, handler: AgentHandler, emitter: EventEmitter | None = None
+) -> GraphNode:
     """Wrap a handler into a LangGraph node with metrics and failure capture."""
 
     async def node(state: WorkflowState) -> StateUpdate:
-        return await run_agent_with_metrics(agent, handler, state)
+        return await run_agent_with_metrics(agent, handler, state, emitter)
 
     node.__name__ = f"{agent.value}_node"
     return node

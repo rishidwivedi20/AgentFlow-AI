@@ -4,9 +4,11 @@ Run from the ``backend/`` directory:
 
     uvicorn app.main:app --reload --port 8000
 
-Single worker only. Phase 4 keeps live workflow runs and their SSE queues in
-process memory, so multiple workers would route a client to a process that has
-never heard of its run.
+SINGLE WORKER ONLY. Live workflow runs, their buffered events and their SSE
+subscriber queues are held in this process's memory by
+``app.services.run_registry``. With ``--workers 2`` a client polling or
+streaming a run can be routed to a process that has never heard of it and will
+receive a 404 for work that is executing elsewhere.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.routes import api_router
+from app.services.run_registry import reset_run_registry
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     _log_startup_state(settings)
     yield
+    # Drop in-flight runs and their subscriber queues so a reload does not
+    # leave orphaned tasks holding memory.
+    reset_run_registry()
     logger.info("Shutdown complete")
 
 

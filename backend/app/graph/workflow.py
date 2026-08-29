@@ -44,6 +44,8 @@ from app.graph.routing import (
 )
 from app.graph.state import WorkflowState, initial_state
 from app.models.enums import AgentName, Platform, Tone
+from app.models.events import EventType
+from app.services.event_bus import EventEmitter, NullEmitter
 from app.services.llm_service import LLMService
 from app.services.research_service import ResearchService
 
@@ -63,8 +65,16 @@ def recursion_limit_for(max_revisions: int) -> int:
     return (max_revisions + 1) * _STEPS_PER_ITERATION + _FIXED_STEPS + _RECURSION_HEADROOM
 
 
-def build_workflow(llm: LLMService, research: ResearchService) -> CompiledStateGraph:
-    """Construct and compile the graph."""
+def build_workflow(
+    llm: LLMService,
+    research: ResearchService,
+    emitter: EventEmitter | None = None,
+) -> CompiledStateGraph:
+    """Construct and compile the graph.
+
+    ``emitter`` is optional and defaults to discarding events, so the
+    synchronous endpoint and every existing test behave exactly as before.
+    """
     builder = StateGraph(WorkflowState)
 
     # Node ids are the AgentName values, so a client can map a metric's
@@ -76,12 +86,12 @@ def build_workflow(llm: LLMService, research: ResearchService) -> CompiledStateG
     fact_checker = AgentName.FACT_CHECKER.value
     finalize = AgentName.FINALIZE.value
 
-    builder.add_node(researcher, build_researcher_node(llm, research))
-    builder.add_node(planner, build_planner_node(llm))
-    builder.add_node(writer, build_writer_node(llm))
-    builder.add_node(editor, build_editor_node(llm))
-    builder.add_node(fact_checker, build_fact_checker_node(llm))
-    builder.add_node(finalize, build_finalize_node())
+    builder.add_node(researcher, build_researcher_node(llm, research, emitter))
+    builder.add_node(planner, build_planner_node(llm, emitter))
+    builder.add_node(writer, build_writer_node(llm, emitter))
+    builder.add_node(editor, build_editor_node(llm, emitter))
+    builder.add_node(fact_checker, build_fact_checker_node(llm, emitter))
+    builder.add_node(finalize, build_finalize_node(emitter))
 
     builder.add_edge(START, researcher)
 
@@ -132,6 +142,7 @@ async def run_workflow(
     tone: Tone,
     number_of_posts: int,
     settings: Settings | None = None,
+    emitter: EventEmitter | None = None,
 ) -> WorkflowState:
     """Execute one workflow run and return its final state.
 
@@ -140,7 +151,8 @@ async def run_workflow(
     so the caller still receives metrics, errors and any usable output.
     """
     resolved = settings or get_settings()
-    graph = build_workflow(llm, research)
+    events = emitter or NullEmitter()
+    graph = build_workflow(llm, research, events)
     state = initial_state(
         topic=topic,
         platform=platform,
@@ -160,6 +172,8 @@ async def run_workflow(
         },
     )
 
+    await events.emit(EventType.WORKFLOW_STARTED)
+
     try:
         final = await graph.ainvoke(
             state,
@@ -168,9 +182,19 @@ async def run_workflow(
     except Exception as exc:
         # The recursion backstop tripping means routing failed to terminate -
         # a bug worth surfacing loudly rather than degrading quietly.
+        await events.emit(
+            EventType.WORKFLOW_FAILED,
+            error_type="workflow_error",
+            message="The workflow graph failed to execute.",
+        )
         raise WorkflowError(
             "The workflow graph failed to execute.",
             details={"reason": type(exc).__name__},
         ) from exc
 
-    return WorkflowState(**final)
+    state = WorkflowState(**final)
+    await events.emit(
+        EventType.WORKFLOW_COMPLETED,
+        workflow_status=state["workflow_status"],
+    )
+    return state
