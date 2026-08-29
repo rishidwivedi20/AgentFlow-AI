@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 
+    # --- Research provider (Phase 3) --------------------------------------
+    # Tavily: 1,000 free credits/month, no card. https://app.tavily.com
+    tavily_api_key: str = ""
+    tavily_max_results: int = Field(default=5, ge=1, le=20)
+    tavily_search_depth: Literal["basic", "advanced"] = "basic"
+
     # --- Orchestration guardrails -----------------------------------------
     max_revisions: int = Field(default=3, ge=1, le=10)
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
@@ -96,6 +102,15 @@ class Settings(BaseSettings):
         agents land in Phase 2.
         """
         return bool(self.active_api_key)
+
+    @property
+    def research_configured(self) -> bool:
+        """Whether a real search backend is available.
+
+        When False the Researcher cannot run: without search results it could
+        only produce sources from model output, which would be fabricated.
+        """
+        return bool(self.tavily_api_key.strip())
 
     @property
     def is_production(self) -> bool:

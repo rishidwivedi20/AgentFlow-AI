@@ -39,8 +39,11 @@ class AgentName(StrEnum):
     cannot drift from the node names the graph actually registers.
     """
 
+    RESEARCHER = "researcher"
+    PLANNER = "planner"
     WRITER = "writer"
     EDITOR = "editor"
+    FACT_CHECKER = "fact_checker"
     FINALIZE = "finalize"
 
 

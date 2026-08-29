@@ -6,13 +6,15 @@ live graph view needs, so a later refactor cannot quietly break them.
 
 from __future__ import annotations
 
+import pytest
+
 from app.graph.workflow import build_workflow
 from app.models.enums import AgentName, AgentStatus, WorkflowStatus
-from tests.conftest import StubProvider, make_service, make_verdict
+from tests.conftest import StubProvider, make_research, make_service, make_verdict, run_pipeline
 
 
 def _graph():
-    return build_workflow(make_service(StubProvider())).get_graph()
+    return build_workflow(make_service(StubProvider()), make_research()).get_graph()
 
 
 def test_graph_node_ids_match_agent_names():
@@ -26,16 +28,20 @@ def test_graph_topology_is_self_describing():
     graph = _graph()
     edges = {(e.source, e.target) for e in graph.edges}
 
-    assert ("__start__", "writer") in edges
+    assert ("__start__", "researcher") in edges
+    assert ("researcher", "planner") in edges
+    assert ("planner", "writer") in edges
     assert ("writer", "editor") in edges
-    assert ("editor", "finalize") in edges
+    assert ("editor", "fact_checker") in edges
+    assert ("fact_checker", "finalize") in edges
     assert ("finalize", "__end__") in edges
 
 
-def test_feedback_loop_edge_is_present_and_marked_conditional():
-    """The Writer<-Editor back edge is what the UI draws as the revision loop."""
-    loop = [e for e in _graph().edges if (e.source, e.target) == ("editor", "writer")]
-    assert loop, "the editor -> writer revision edge must exist"
+@pytest.mark.parametrize("source", ["editor", "fact_checker"])
+def test_feedback_loop_edges_are_present_and_conditional(source):
+    """Both critics can send work back; the UI draws each as a revision loop."""
+    loop = [e for e in _graph().edges if (e.source, e.target) == (source, "writer")]
+    assert loop, f"the {source} -> writer revision edge must exist"
     assert loop[0].conditional is True
     assert loop[0].data == "revise"
 
@@ -53,12 +59,15 @@ async def test_metrics_reconstruct_the_loop_in_order(settings, run_kwargs):
 
     metrics = state["agent_metrics"]
     assert [m.agent.value for m in metrics] == [
+        "researcher",
+        "planner",
         "writer",
         "editor",
         "writer",
         "editor",
         "writer",
         "editor",
+        "fact_checker",
         "finalize",
     ]
     # Sequence is dense, gapless and ordered: usable as a stream cursor.
@@ -79,8 +88,10 @@ async def test_failed_runs_are_also_sequenced(settings, run_kwargs):
     provider = StubProvider(fail_on=["writer"])
     state = await run_workflow_helper(provider, settings, run_kwargs)
 
-    assert state["agent_metrics"][0].sequence == 0
-    assert state["agent_metrics"][0].status is AgentStatus.FAILED
+    metrics = state["agent_metrics"]
+    assert [m.sequence for m in metrics] == list(range(len(metrics)))
+    writer_metric = next(m for m in metrics if m.agent is AgentName.WRITER)
+    assert writer_metric.status is AgentStatus.FAILED
 
 
 def test_agent_status_covers_every_ui_node_state():
@@ -104,6 +115,4 @@ def test_workflow_status_terminality_is_explicit():
 
 
 async def run_workflow_helper(provider, settings, run_kwargs):
-    from app.graph.workflow import run_workflow
-
-    return await run_workflow(make_service(provider), settings=settings, **run_kwargs)
+    return await run_pipeline(provider, settings, run_kwargs)

@@ -62,6 +62,24 @@ class LLMRateLimitError(LLMProviderError):
     error_type = "rate_limited"
 
 
+class ResearchProviderError(OrchestrAIError):
+    """The web search provider failed, refused, or returned an unusable body.
+
+    Distinct from ``LLMProviderError`` so a run's errors say which external
+    dependency broke - the two have different keys, quotas and failure modes.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    error_type = "research_provider_error"
+
+
+class ResearchRateLimitError(ResearchProviderError):
+    """The search provider's rate or credit limit was reached."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    error_type = "research_rate_limited"
+
+
 class LLMTimeoutError(OrchestrAIError):
     """The LLM provider did not respond within the configured timeout."""
 

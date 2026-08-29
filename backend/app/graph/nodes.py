@@ -11,14 +11,59 @@ from __future__ import annotations
 import logging
 
 from app.agents.editor import run_editor
+from app.agents.fact_checker import run_fact_checker
+from app.agents.planner import run_planner
+from app.agents.researcher import run_researcher
 from app.agents.writer import run_writer
 from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import DraftRecord
 from app.models.enums import AgentName, WorkflowStatus
 from app.services.llm_service import LLMService
 from app.services.metrics_service import AgentRunResult, GraphNode, StateUpdate, as_node
+from app.services.research_service import ResearchService
 
 logger = logging.getLogger(__name__)
+
+
+def build_researcher_node(llm: LLMService, research: ResearchService) -> GraphNode:
+    """Researcher node: search the topic and extract cited facts."""
+
+    async def handler(state: WorkflowState) -> AgentRunResult:
+        result, llm_result = await run_researcher(llm, research, topic=state["topic"])
+        return AgentRunResult(
+            update={
+                "research": result,
+                # Rendered here so the Writer never depends on the research
+                # model's shape - the same seam it has used since Phase 2.
+                "research_context": result.as_writer_context(),
+            },
+            # None when the search found nothing and no LLM call was made.
+            usage=llm_result.usage if llm_result else None,
+        )
+
+    return as_node(AgentName.RESEARCHER, handler)
+
+
+def build_planner_node(llm: LLMService) -> GraphNode:
+    """Planner node: assign each post a distinct angle."""
+
+    async def handler(state: WorkflowState) -> AgentRunResult:
+        research = state["research"]
+        if research is None:
+            # Unreachable: routing sends a failed Researcher to finalize.
+            raise RuntimeError("Planner invoked with no research.")
+
+        result = await run_planner(
+            llm,
+            topic=state["topic"],
+            platform=state["platform"],
+            tone=state["tone"],
+            research=research,
+            number_of_posts=state["number_of_posts"],
+        )
+        return AgentRunResult(update={"content_plan": result.value}, usage=result.usage)
+
+    return as_node(AgentName.PLANNER, handler)
 
 
 def build_writer_node(llm: LLMService) -> GraphNode:
@@ -26,9 +71,20 @@ def build_writer_node(llm: LLMService) -> GraphNode:
 
     async def handler(state: WorkflowState) -> AgentRunResult:
         feedback = state["editor_feedback"]
-        # The counter advances here and nowhere else. Presence of feedback is
-        # what makes a run a revision; the initial draft leaves it at 0.
-        revision = state["revision_count"] + 1 if feedback is not None else 0
+        report = state["fact_check"]
+
+        # Unsupported claims are only worth resending when the Fact Checker
+        # actually rejected this draft.
+        fact_feedback = (
+            report.as_writer_feedback()
+            if report is not None and report.has_critical_issues
+            else None
+        )
+
+        # Either critic can make a run a revision. The counter advances here
+        # and nowhere else, which is what bounds both loops together.
+        is_revision = feedback is not None or fact_feedback is not None
+        revision = state["revision_count"] + 1 if is_revision else 0
 
         result = await run_writer(
             llm,
@@ -37,7 +93,9 @@ def build_writer_node(llm: LLMService) -> GraphNode:
             tone=state["tone"],
             number_of_posts=state["number_of_posts"],
             research_context=state["research_context"],
+            content_plan=state["content_plan"],
             feedback=feedback,
+            fact_check_feedback=fact_feedback,
         )
         return AgentRunResult(
             update={"current_draft": result.value, "revision_count": revision},
@@ -53,8 +111,7 @@ def build_editor_node(llm: LLMService) -> GraphNode:
     async def handler(state: WorkflowState) -> AgentRunResult:
         draft = state["current_draft"]
         if draft is None:
-            # Only reachable if the Writer failed. Routing sends failures to
-            # finalize, so this is a guard against a future graph edit.
+            # Unreachable: routing sends a failed Writer to finalize.
             raise RuntimeError("Editor invoked with no draft to review.")
 
         result = await run_editor(
@@ -67,8 +124,7 @@ def build_editor_node(llm: LLMService) -> GraphNode:
         )
         verdict = result.value
         # The Editor appends the draft record because it is the only
-        # participant that knows the score. Draft and evaluation are stored as
-        # one already-paired unit.
+        # participant that knows the score.
         record = DraftRecord(
             revision=state["revision_count"], posts=draft.posts, evaluation=verdict
         )
@@ -82,6 +138,22 @@ def build_editor_node(llm: LLMService) -> GraphNode:
         )
 
     return as_node(AgentName.EDITOR, handler)
+
+
+def build_fact_checker_node(llm: LLMService) -> GraphNode:
+    """Fact Checker node: judge the approved draft's claims against research."""
+
+    async def handler(state: WorkflowState) -> AgentRunResult:
+        draft = state["current_draft"]
+        research = state["research"]
+        if draft is None or research is None:
+            # Unreachable: routing guarantees both exist on this path.
+            raise RuntimeError("Fact checker invoked without a draft and research.")
+
+        result = await run_fact_checker(llm, research=research, posts=draft.posts)
+        return AgentRunResult(update={"fact_check": result.value}, usage=result.usage)
+
+    return as_node(AgentName.FACT_CHECKER, handler)
 
 
 def build_finalize_node() -> GraphNode:
@@ -105,8 +177,8 @@ def _finalize(state: WorkflowState) -> StateUpdate:
         posts = best.posts
         source = f"revision {best.revision} (score {best.quality_score:.1f})"
     elif state["current_draft"] is not None:
-        # The Editor never produced a verdict, but the Writer produced content.
-        # Returning it beats returning nothing, flagged by the status.
+        # No verdict was produced, but content exists. Returning it beats
+        # returning nothing, flagged by the status.
         posts = state["current_draft"].posts
         source = "unevaluated draft"
     else:
@@ -131,13 +203,20 @@ def _derive_status(
 ) -> WorkflowStatus:
     """Map the finished run onto a terminal status.
 
-    Precedence matters: a run with no usable output is FAILED regardless of why,
-    and errors downgrade an otherwise clean completion rather than hiding.
+    Precedence matters: a run with no usable output is FAILED regardless of
+    why, and errors downgrade an otherwise clean completion rather than hiding.
+    Unsupported claims that survived the revision budget are reported the same
+    way - the posts are usable, but the run did not fully succeed.
     """
     if not has_posts:
         return WorkflowStatus.FAILED
     if had_errors:
         return WorkflowStatus.COMPLETED_WITH_ERRORS
+
+    report = state["fact_check"]
+    if report is not None and report.has_critical_issues:
+        return WorkflowStatus.COMPLETED_WITH_ERRORS
+
     if state["approved"]:
         return WorkflowStatus.COMPLETED
     return WorkflowStatus.MAX_REVISIONS_REACHED

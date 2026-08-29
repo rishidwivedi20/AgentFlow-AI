@@ -13,7 +13,10 @@ from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import Post
 from app.models.enums import Platform, Tone, WorkflowStatus
 from app.models.errors import WorkflowErrorRecord
+from app.models.factcheck import FactCheckReport
 from app.models.metrics import AgentMetric
+from app.models.plan import ContentPlan
+from app.models.research import ResearchFact, Source
 from app.models.review import EditorOutput
 
 MIN_POSTS = 1
@@ -71,6 +74,23 @@ class WorkflowRunResponse(BaseModel):
     editor_feedback: EditorOutput | None = Field(
         default=None, description="The Editor's most recent verdict."
     )
+    research_summary: str | None = Field(
+        default=None, description="Neutral overview of what the sources say."
+    )
+    research_facts: list[ResearchFact] = Field(
+        default_factory=list,
+        description="Statements drawn from the sources, each citing one by index.",
+    )
+    sources: list[Source] = Field(
+        default_factory=list,
+        description="Real search results. Never produced by a model.",
+    )
+    content_plan: ContentPlan | None = Field(
+        default=None, description="The angle assigned to each post."
+    )
+    fact_check: FactCheckReport | None = Field(
+        default=None, description="Verdicts on the final draft's factual claims."
+    )
     agent_metrics: list[AgentMetric] = Field(description="One entry per agent execution.")
     errors: list[WorkflowErrorRecord] = Field(
         description="Client-safe failure records. Non-empty does not always mean failure."
@@ -80,6 +100,7 @@ class WorkflowRunResponse(BaseModel):
 def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
     """Project final graph state onto the API contract."""
     best = select_best_draft(state)
+    research = state["research"]
     return WorkflowRunResponse(
         workflow_status=state["workflow_status"],
         topic=state["topic"],
@@ -91,6 +112,11 @@ def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
         approved=state["approved"],
         quality_score=best.quality_score if best else None,
         editor_feedback=state["editor_feedback"],
+        research_summary=research.summary if research else None,
+        research_facts=research.facts if research else [],
+        sources=research.sources if research else [],
+        content_plan=state["content_plan"],
+        fact_check=state["fact_check"],
         agent_metrics=state["agent_metrics"],
         errors=state["errors"],
     )

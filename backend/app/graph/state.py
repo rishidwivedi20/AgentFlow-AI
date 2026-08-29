@@ -27,7 +27,10 @@ from typing import Annotated, TypedDict
 from app.models.content import DraftRecord, Post, WriterOutput
 from app.models.enums import Platform, Tone, WorkflowStatus
 from app.models.errors import WorkflowErrorRecord
+from app.models.factcheck import FactCheckReport
 from app.models.metrics import AgentMetric
+from app.models.plan import ContentPlan
+from app.models.research import ResearchResult
 from app.models.review import EditorOutput
 
 
@@ -52,11 +55,22 @@ class WorkflowState(TypedDict):
     """Hard cap on Writer revisions. Copied from settings so a run's limit is
     recorded in its own state rather than read from global config mid-flight."""
 
-    # --- Phase 3 seam -----------------------------------------------------
+    # --- Research and planning -------------------------------------------
+    research: ResearchResult | None
+    """Facts and sources gathered by the Researcher. None before it runs, and
+    when a search returned nothing."""
+
     research_context: str | None
-    """Verified research the Writer must ground claims in. Always None in
-    Phase 2. The Writer prompt already renders it when present, so adding the
-    Researcher means adding a node and an edge - the Writer does not change."""
+    """The research rendered as grounding text for the Writer. Derived from
+    ``research``; kept as its own field so the Writer stays decoupled from the
+    research model's shape."""
+
+    content_plan: ContentPlan | None
+    """One angle per post, assigned by the Planner. None before it runs."""
+
+    fact_check: FactCheckReport | None
+    """Verdicts on the latest draft's factual claims. None until the Fact
+    Checker has run at least once; replaced on each pass."""
 
     # --- Loop state (last-write-wins) -------------------------------------
     current_draft: WriterOutput | None
@@ -116,7 +130,10 @@ def initial_state(
         tone=tone,
         number_of_posts=number_of_posts,
         max_revisions=max_revisions,
+        research=None,
         research_context=research_context,
+        content_plan=None,
+        fact_check=None,
         current_draft=None,
         editor_feedback=None,
         revision_count=0,

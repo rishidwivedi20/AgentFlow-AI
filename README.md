@@ -12,17 +12,18 @@ conditional routing, feedback loops, observability, and evaluation.
 
 ## Status
 
-**Phase 2 (LangGraph MVP) — complete.** A stateful Writer ↔ Editor graph runs
-behind `POST /api/workflows/run`, with conditional routing, a hard revision cap,
-structured LLM output, per-agent metrics and graceful failure handling.
-Verified end to end against the live Gemini API.
+**Phase 3 (full agent pipeline) — complete.** Five agents run behind
+`POST /api/workflows/run`: a Researcher grounded in real web search, a Planner
+that assigns each post a distinct angle, and a Writer ↔ Editor ↔ Fact Checker
+loop sharing one hard revision budget. Verified end to end against the live
+Gemini and Tavily APIs.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | 1 | FastAPI + React foundation, config, health check | ✅ done |
 | 2 | LangGraph MVP: Writer ↔ Editor loop, max 3 revisions | ✅ done |
-| 3 | Real research, Content Planner, Fact Checker, source tracking | next |
-| 4 | SSE streaming, React Flow visualisation, live activity log | planned |
+| 3 | Real research, Content Planner, Fact Checker, source tracking | ✅ done |
+| 4 | SSE streaming, React Flow visualisation, live activity log | next |
 | 5 | Latency, token usage, revision and workflow metrics | planned |
 | 6 | Single-agent baseline vs multi-agent comparison | planned |
 
@@ -89,8 +90,8 @@ invalid input (422) and unusable configuration (503).
 cd backend; .venv\Scripts\python.exe -m pytest tests/
 ```
 
-103 tests, no network calls and no API key required - the LLM provider is
-stubbed throughout.
+171 tests, no network calls and no API key required - both the LLM and search
+providers are stubbed throughout.
 
 ## Configuration
 
@@ -106,6 +107,8 @@ validated `Settings` object.
 | `LLM_PROVIDER` | `gemini` | `gemini` or `groq` |
 | `GEMINI_API_KEY` | — | [aistudio.google.com](https://aistudio.google.com/apikey), free tier |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | `gemini-2.5-flash` is closed to new API keys |
+| `TAVILY_API_KEY` | — | [app.tavily.com](https://app.tavily.com), 1,000 free credits/month, no card |
+| `TAVILY_MAX_RESULTS` | `5` | Sources fetched per run |
 | `GROQ_API_KEY` | — | [console.groq.com](https://console.groq.com), free tier |
 | `MAX_REVISIONS` | `3` | Hard cap on Writer ↔ Editor cycles |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-call provider timeout |
@@ -122,6 +125,15 @@ is publicly readable, so the frontend holds only `VITE_API_BASE_URL`. All LLM
 calls route through FastAPI for this reason.
 
 ## Design decisions
+
+**A source can only come from a real search result.** URLs never appear in any
+LLM response schema. The Researcher cites sources by index into a list it was
+handed, and indexes that do not resolve are dropped. Fabricated citations are
+not discouraged by prompting - they are structurally impossible.
+
+**Both critics share one revision budget.** An Editor rejection and a Fact
+Checker rejection draw on the same `revision_count`. Separate allowances would
+let the two loops alternate and multiply worst-case token spend.
 
 **Graph state is a `TypedDict`, not a Pydantic model.** LangGraph nodes return
 partial updates merged by reducers; a `BaseModel` root fights that. Pydantic is

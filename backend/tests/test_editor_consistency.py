@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.graph.workflow import run_workflow
 from app.models.enums import WorkflowStatus
 from app.models.review import EditorIssue, EditorOutput, IssueSeverity, ReviewDimension
-from tests.conftest import StubProvider, make_service
+from tests.conftest import StubProvider, run_pipeline
 
 
 def issue(severity: IssueSeverity) -> EditorIssue:
@@ -103,7 +102,7 @@ async def test_contradictory_approval_triggers_a_revision(settings, run_kwargs):
             verdict(approved=True, severities=[]),
         ]
     )
-    state = await run_workflow(make_service(provider), settings=settings, **run_kwargs)
+    state = await run_pipeline(provider, settings, run_kwargs)
 
     assert state["revision_count"] == 1, "the contradictory verdict must not finalise the run"
     assert provider.writer_calls == 2
@@ -114,7 +113,7 @@ async def test_contradictory_approval_triggers_a_revision(settings, run_kwargs):
 async def test_persistent_contradiction_still_terminates(settings, run_kwargs):
     """Overriding approval must not create an unbounded loop."""
     provider = StubProvider(verdicts=[verdict(approved=True, severities=[IssueSeverity.HIGH])])
-    state = await run_workflow(make_service(provider), settings=settings, **run_kwargs)
+    state = await run_pipeline(provider, settings, run_kwargs)
 
     assert state["workflow_status"] is WorkflowStatus.MAX_REVISIONS_REACHED
     assert state["revision_count"] == 3

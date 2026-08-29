@@ -5,5 +5,17 @@ provider touches one adapter instead of every agent.
 """
 
 from app.services.llm_service import LLMService, build_llm_service, build_provider
+from app.services.research_service import (
+    ResearchService,
+    build_research_provider,
+    build_research_service,
+)
 
-__all__ = ["LLMService", "build_llm_service", "build_provider"]
+__all__ = [
+    "LLMService",
+    "ResearchService",
+    "build_llm_service",
+    "build_provider",
+    "build_research_provider",
+    "build_research_service",
+]

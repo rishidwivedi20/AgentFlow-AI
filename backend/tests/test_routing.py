@@ -44,8 +44,9 @@ def _metric(agent: AgentName, status: AgentStatus, sequence: int = 0) -> AgentMe
     )
 
 
-def test_approved_draft_finalizes():
-    assert route_after_editor(_state(approved=True, revision_count=0)) is EditorRoute.FINALIZE
+def test_approved_draft_goes_to_fact_check():
+    """Prose quality and factual support are separate standards."""
+    assert route_after_editor(_state(approved=True, revision_count=0)) is EditorRoute.FACT_CHECK
 
 
 @pytest.mark.parametrize("revision_count", [0, 1, 2])
@@ -63,8 +64,9 @@ def test_rejected_above_cap_finalizes():
     assert route_after_editor(_state(approved=False, revision_count=9)) is EditorRoute.FINALIZE
 
 
-def test_approved_at_cap_still_finalizes():
-    assert route_after_editor(_state(approved=True, revision_count=3)) is EditorRoute.FINALIZE
+def test_approved_at_cap_still_fact_checks():
+    """Exhausting revisions must not skip verification of an approved draft."""
+    assert route_after_editor(_state(approved=True, revision_count=3)) is EditorRoute.FACT_CHECK
 
 
 def test_agent_failure_short_circuits_to_finalize():

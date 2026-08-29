@@ -15,6 +15,7 @@ from app.schemas.workflow import (
     build_workflow_response,
 )
 from app.services.llm_service import build_llm_service
+from app.services.research_service import build_research_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +34,15 @@ async def run(request: WorkflowRunRequest, settings: SettingsDep) -> WorkflowRun
 
     Returns 200 with a failure ``workflow_status`` when the run executed but
     did not succeed. A missing API key raises ``ConfigurationError`` (503)
-    before any work starts - there is no point spending a request to discover
-    configuration is absent.
+    before any work starts - there is no point spending a request, or a search
+    credit, to discover configuration is absent.
     """
     llm = build_llm_service(settings)
+    research = build_research_service(settings)
 
     state = await run_workflow(
         llm,
+        research,
         topic=request.topic,
         platform=request.platform,
         tone=request.tone,

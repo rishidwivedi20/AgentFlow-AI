@@ -19,3 +19,10 @@ langgraph==1.2.11
 # A second provider would be added as another adapter behind LLMProvider,
 # never as a direct import inside an agent.
 google-genai==2.20.0
+
+# --- Research provider (Phase 3) ---
+# Tavily's REST API is a single authenticated POST, so it is called directly
+# rather than through tavily-python, which would pull in requests and tiktoken
+# for no benefit. httpx is already in the tree via google-genai; pinned here
+# because we now depend on it directly.
+httpx==0.28.1

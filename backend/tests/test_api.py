@@ -9,7 +9,7 @@ from app.core.config import Settings, get_settings
 from app.main import app
 from app.models.enums import WorkflowStatus
 from app.services.llm_service import LLMService
-from tests.conftest import StubProvider, make_verdict
+from tests.conftest import StubProvider, make_research, make_verdict
 
 VALID_BODY = {
     "topic": "How AI is changing software engineering",
@@ -28,8 +28,14 @@ def client(monkeypatch):
         return LLMService(provider, timeout_seconds=5.0, max_retries=0)
 
     monkeypatch.setattr("app.routes.workflows.build_llm_service", fake_build)
+    monkeypatch.setattr(
+        "app.routes.workflows.build_research_service", lambda _s=None: make_research()
+    )
     app.dependency_overrides[get_settings] = lambda: Settings(
-        gemini_api_key="test-key", max_revisions=3, app_env="test"
+        gemini_api_key="test-key",
+        tavily_api_key="test-search-key",
+        max_revisions=3,
+        app_env="test",
     )
     with TestClient(app) as c:
         c.provider = provider
@@ -91,9 +97,23 @@ def test_successful_run_returns_full_payload(client):
     assert body["errors"] == []
 
     # Every required observability field is present.
-    assert {m["agent"] for m in body["agent_metrics"]} == {"writer", "editor", "finalize"}
+    assert {m["agent"] for m in body["agent_metrics"]} == {
+        "researcher",
+        "planner",
+        "writer",
+        "editor",
+        "fact_checker",
+        "finalize",
+    }
     assert all("latency_seconds" in m for m in body["agent_metrics"])
     assert body["editor_feedback"]["quality_score"] == 9.0
+
+    # Phase 3 additions: research, sources and verification reach the client.
+    assert body["research_summary"]
+    assert body["sources"], "real sources must be returned"
+    assert all(s["url"].startswith("http") for s in body["sources"])
+    assert body["content_plan"]["angles"]
+    assert body["fact_check"] is not None
 
 
 def test_post_shape(client):
@@ -110,8 +130,14 @@ def test_failed_run_returns_200_with_structured_errors(monkeypatch):
         "app.routes.workflows.build_llm_service",
         lambda _s=None: LLMService(provider, timeout_seconds=5.0, max_retries=0),
     )
+    monkeypatch.setattr(
+        "app.routes.workflows.build_research_service", lambda _s=None: make_research()
+    )
     app.dependency_overrides[get_settings] = lambda: Settings(
-        gemini_api_key="test-key", max_revisions=3, app_env="test"
+        gemini_api_key="test-key",
+        tavily_api_key="test-search-key",
+        max_revisions=3,
+        app_env="test",
     )
     try:
         with TestClient(app) as c:
@@ -122,7 +148,8 @@ def test_failed_run_returns_200_with_structured_errors(monkeypatch):
         assert body["final_posts"] == []
         assert body["errors"][0]["agent"] == "writer"
         assert "Traceback" not in body["errors"][0]["message"]
-        assert body["agent_metrics"][0]["status"] == "failed"
+        writer_metric = next(m for m in body["agent_metrics"] if m["agent"] == "writer")
+        assert writer_metric["status"] == "failed"
     finally:
         app.dependency_overrides.clear()
 
@@ -130,7 +157,11 @@ def test_failed_run_returns_200_with_structured_errors(monkeypatch):
 def test_missing_api_key_returns_503_before_running(monkeypatch):
     """Configuration problems are non-2xx and cost no LLM call."""
     app.dependency_overrides[get_settings] = lambda: Settings(
-        gemini_api_key="", groq_api_key="", llm_provider="gemini", app_env="test"
+        gemini_api_key="",
+        groq_api_key="",
+        tavily_api_key="",
+        llm_provider="gemini",
+        app_env="test",
     )
     try:
         with TestClient(app) as c:

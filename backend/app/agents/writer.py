@@ -13,6 +13,7 @@ from typing import Final
 from app.agents.prompts import writer as prompts
 from app.models.content import WriterOutput
 from app.models.enums import Platform, Tone
+from app.models.plan import ContentPlan
 from app.models.review import EditorOutput
 from app.services.llm.base import LLMResult
 from app.services.llm_service import LLMService
@@ -32,13 +33,16 @@ async def run_writer(
     tone: Tone,
     number_of_posts: int,
     research_context: str | None = None,
+    content_plan: ContentPlan | None = None,
     feedback: EditorOutput | None = None,
+    fact_check_feedback: str | None = None,
 ) -> LLMResult[WriterOutput]:
     """Produce one draft.
 
-    ``feedback`` present means this is a revision; the previous critique is
-    folded into the prompt. ``research_context`` is the Phase 3 seam - the
-    Writer already grounds claims in it when supplied.
+    A revision is signalled by ``feedback`` (editor critique) or
+    ``fact_check_feedback`` (unsupported claims); either is folded into the
+    prompt. ``research_context`` and ``content_plan`` ground the writing in
+    real sources and assigned angles when supplied.
     """
     result = await llm.generate_structured(
         system_prompt=prompts.build_system_prompt(platform, tone),
@@ -46,7 +50,9 @@ async def run_writer(
             topic=topic,
             number_of_posts=number_of_posts,
             research_context=research_context,
+            content_plan=content_plan,
             feedback=feedback,
+            fact_check_feedback=fact_check_feedback,
         ),
         schema=WriterOutput,
         temperature=WRITER_TEMPERATURE,

@@ -12,10 +12,24 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.content import Post, WriterOutput
+from app.models.factcheck import FactCheckClaim, FactCheckReport
+from app.models.plan import ContentAngle, ContentPlan
+from app.models.research import ResearchFact, ResearchOutput
 from app.models.review import EditorIssue, EditorOutput
 from app.services.llm.gemini import _to_provider_schema
 
-LLM_FACING_MODELS = [WriterOutput, EditorOutput, Post, EditorIssue]
+LLM_FACING_MODELS = [
+    WriterOutput,
+    EditorOutput,
+    Post,
+    EditorIssue,
+    ResearchOutput,
+    ResearchFact,
+    ContentPlan,
+    ContentAngle,
+    FactCheckReport,
+    FactCheckClaim,
+]
 
 
 def collect_additional_properties(schema, path="root"):

@@ -8,6 +8,7 @@ function.
 from __future__ import annotations
 
 from app.models.enums import Platform, Tone
+from app.models.plan import ContentPlan
 from app.models.review import EditorOutput
 
 _PLATFORM_RULES: dict[Platform, str] = {
@@ -47,7 +48,9 @@ def build_user_prompt(
     topic: str,
     number_of_posts: int,
     research_context: str | None = None,
+    content_plan: ContentPlan | None = None,
     feedback: EditorOutput | None = None,
+    fact_check_feedback: str | None = None,
 ) -> str:
     """Task instructions for one Writer run.
 
