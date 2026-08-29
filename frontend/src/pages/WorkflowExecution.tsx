@@ -1,50 +1,60 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 
+import { ActivityLog } from "@/components/workflow/ActivityLog";
+import { WorkflowGraph } from "@/components/workflow/WorkflowGraph";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, getRun } from "@/services/api";
-import { isRunFinished } from "@/types/run";
-import type { RunStatusResponse } from "@/types/run";
+import { useWorkflowStream } from "@/hooks/useWorkflowStream";
+import { deriveProgress, totalTokens } from "@/lib/workflow-graph";
+import type { WorkflowStatus } from "@/types/workflow";
 
-/**
- * Workflow execution page.
- *
- * Chunk 2 scaffold: reads run state from the status endpoint so the routing and
- * data path are real end to end. The React Flow graph, the live event stream
- * and the results panel are added in the following chunks - this deliberately
- * shows only what it can actually observe today rather than faking a UI.
- */
+const STREAM_LABELS = {
+  connecting: "Connecting…",
+  streaming: "Live",
+  finished: "Finished",
+  error: "Disconnected",
+} as const;
+
+/** How a terminal status should be presented, and what it actually means. */
+const STATUS_PRESENTATION: Record<
+  WorkflowStatus,
+  { tone: "default" | "secondary" | "destructive"; note?: string }
+> = {
+  pending: { tone: "secondary" },
+  running: { tone: "secondary" },
+  completed: { tone: "default" },
+  max_revisions_reached: {
+    tone: "secondary",
+    note: "The revision limit was reached without editorial approval. The best available draft was returned.",
+  },
+  completed_unverified: {
+    tone: "secondary",
+    note: "The posts are publishable prose, but their claims are unverified or unsupported. Nothing crashed - review before publishing.",
+  },
+  completed_with_errors: {
+    tone: "destructive",
+    note: "An agent failed during the run. Usable output was still produced.",
+  },
+  failed: { tone: "destructive", note: "No usable content was produced." },
+};
+
 export default function WorkflowExecution() {
   const { runId = "" } = useParams();
-  const [run, setRun] = useState<RunStatusResponse | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { events, run, streamState, error, reload } = useWorkflowStream(runId);
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      setRun(await getRun(runId));
-      setError(null);
-    } catch (cause) {
-      setRun(null);
-      setError(
-        cause instanceof ApiError ? cause : new ApiError(0, "unknown", "Could not load the run."),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [runId]);
+  const progress = useMemo(() => deriveProgress(events), [events]);
+  const tokens = useMemo(() => totalTokens(events), [events]);
 
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    void load();
-  }, [load]);
+  const result = run?.result ?? null;
+  const status = result?.workflow_status;
+  const presentation = status ? STATUS_PRESENTATION[status] : null;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
+    <div className="mx-auto max-w-6xl px-6 py-8">
       <Link
         to="/"
         className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
@@ -53,71 +63,103 @@ export default function WorkflowExecution() {
         New workflow
       </Link>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">
             {run?.topic || "Workflow run"}
           </h1>
           <p className="mt-1 font-mono text-xs text-muted-foreground">{runId}</p>
         </div>
-        <div className="flex items-center gap-3">
-          {run && <Badge variant="secondary">{run.state}</Badge>}
-          <Button variant="ghost" size="sm" onClick={() => void load()}>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <StreamIndicator state={streamState} />
+          {status && (
+            <Badge variant={presentation?.tone ?? "secondary"}>{status.replace(/_/g, " ")}</Badge>
+          )}
+          {tokens > 0 && (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {tokens.toLocaleString()} tokens
+            </span>
+          )}
+          <Button variant="ghost" size="sm" onClick={reload}>
             <RefreshCw aria-hidden="true" />
-            Refresh
+            Reconnect
           </Button>
         </div>
       </div>
 
-      {loading && (
-        <p className="mt-8 flex items-center gap-2 text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          Loading run…
-        </p>
-      )}
-
       {error && (
-        <Alert variant="destructive" className="mt-8">
-          <AlertTitle>
-            {error.status === 404 ? "Run not found" : "Could not load the run"}
-          </AlertTitle>
-          <AlertDescription>{error.message}</AlertDescription>
+        <Alert variant="destructive" className="mt-6">
+          <AlertTitle>Stream interrupted</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      {run && (
-        <Card className="mt-8">
-          <CardHeader>
-            <CardTitle>Execution</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <Row label="State" value={run.state} />
-            <Row label="Events recorded" value={String(run.event_count)} />
-            <Row label="Started" value={new Date(run.created_at).toLocaleTimeString()} />
-            {run.finished_at && (
-              <Row label="Finished" value={new Date(run.finished_at).toLocaleTimeString()} />
-            )}
-            {run.result && <Row label="Workflow status" value={run.result.workflow_status} />}
-            {run.error_message && <Row label="Error" value={run.error_message} />}
+      {run?.error_message && (
+        <Alert variant="destructive" className="mt-6">
+          <AlertTitle>The run could not complete</AlertTitle>
+          <AlertDescription>{run.error_message}</AlertDescription>
+        </Alert>
+      )}
 
-            {!isRunFinished(run.state) && (
-              <p className="pt-2 text-muted-foreground">
-                This run is still executing. Live progress arrives in the next chunk; refresh to
-                see the current state.
-              </p>
-            )}
+      {presentation?.note && (
+        <Alert className="mt-6" variant={presentation.tone === "destructive" ? "destructive" : "default"}>
+          <AlertTitle>{status?.replace(/_/g, " ")}</AlertTitle>
+          <AlertDescription>{presentation.note}</AlertDescription>
+        </Alert>
+      )}
+
+      {result?.warnings.map((warning) => (
+        <Alert key={warning} className="mt-3">
+          <AlertDescription>{warning}</AlertDescription>
+        </Alert>
+      ))}
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <WorkflowGraph progress={progress} />
+
+        <Card className="overflow-hidden py-0">
+          <CardHeader className="border-b py-4">
+            <CardTitle className="text-sm">Activity</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <ActivityLog events={events} />
           </CardContent>
         </Card>
+      </div>
+
+      {result && (
+        <p className="mt-6 text-sm text-muted-foreground">
+          {result.final_posts.length > 0
+            ? `${result.final_posts.length} post(s) produced after ${result.revision_count} revision(s). The results panel arrives in the next chunk.`
+            : "This run produced no posts."}
+        </p>
       )}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function StreamIndicator({ state }: { state: keyof typeof STREAM_LABELS }) {
+  const live = state === "streaming";
+  const connecting = state === "connecting";
+
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b py-2 last:border-0">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono">{value}</span>
-    </div>
+    <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+      {connecting ? (
+        <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+      ) : (
+        <span
+          className={
+            live
+              ? "size-2 animate-pulse rounded-full bg-emerald-500"
+              : state === "error"
+                ? "size-2 rounded-full bg-destructive"
+                : "size-2 rounded-full bg-muted-foreground/40"
+          }
+          aria-hidden="true"
+        />
+      )}
+      {STREAM_LABELS[state]}
+    </span>
   );
 }
