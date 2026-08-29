@@ -1,5 +1,7 @@
 import { ApiError, type ApiErrorBody } from "@/types/api";
 import type { HealthResponse } from "@/types/health";
+import type { RunAcceptedResponse, RunStatusResponse } from "@/types/run";
+import type { WorkflowRunRequest } from "@/types/workflow";
 
 /**
  * Base URL of the FastAPI backend.
@@ -68,6 +70,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
+}
+
+/**
+ * Queue a workflow run. Returns as soon as the run is registered - the work
+ * happens in the background and is followed via the event stream.
+ */
+export function createRun(body: WorkflowRunRequest): Promise<RunAcceptedResponse> {
+  return request<RunAcceptedResponse>("/api/workflows", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Read a run's current state and, once it has finished, its result.
+ *
+ * This is how a reloaded page recovers: the event stream is a convenience, not
+ * the only way to learn what happened.
+ */
+export function getRun(runId: string): Promise<RunStatusResponse> {
+  return request<RunStatusResponse>(`/api/workflows/${encodeURIComponent(runId)}`);
+}
+
+/**
+ * URL of a run's SSE stream, for `EventSource`.
+ *
+ * `EventSource` cannot send headers, so on reconnect the browser echoes the
+ * last `id:` it saw as `Last-Event-ID` - which the backend prefers over any
+ * cursor in the query string.
+ */
+export function runEventsUrl(runId: string, cursor?: number): string {
+  const base = `${API_BASE_URL}/api/workflows/${encodeURIComponent(runId)}/events`;
+  return cursor === undefined ? base : `${base}?cursor=${cursor}`;
 }
 
 export { API_BASE_URL, ApiError };
