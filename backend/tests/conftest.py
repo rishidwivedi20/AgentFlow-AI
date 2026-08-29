@@ -61,13 +61,17 @@ def make_research_output(fact_count: int = 2) -> ResearchOutput:
             )
             for i in range(fact_count)
         ],
+        limitations=["No figures on adoption rates in smaller teams."],
     )
 
 
 def make_research_result(*, sources: int = 3, facts: int = 2) -> ResearchResult:
     output = make_research_output(facts)
     return ResearchResult(
-        summary=output.summary, facts=output.facts, sources=make_sources(sources)
+        summary=output.summary,
+        facts=output.facts,
+        limitations=output.limitations,
+        sources=make_sources(sources),
     )
 
 
@@ -76,9 +80,13 @@ def make_plan(count: int = 2) -> ContentPlan:
     return ContentPlan(
         angles=[
             ContentAngle(
+                post_number=i + 1,
                 angle=f"Angle {i}",
                 content_type=types[i % len(types)],
+                hook_strategy=f"Open with a question about {i}.",
                 key_points=[f"Point {i}a", f"Point {i}b"],
+                target_audience="Mid-level software engineers",
+                intended_takeaway=f"Takeaway {i}",
             )
             for i in range(count)
         ]
@@ -119,6 +127,7 @@ def make_fact_check(*, unsupported: int = 0, verified: int = 1) -> FactCheckRepo
             verdict=ClaimVerdict.VERIFIED,
             reasoning="Directly supported by a research fact.",
             post_index=1,
+            supporting_source_index=0,
         )
         for i in range(verified)
     ]
@@ -128,6 +137,7 @@ def make_fact_check(*, unsupported: int = 0, verified: int = 1) -> FactCheckRepo
             verdict=ClaimVerdict.UNSUPPORTED,
             reasoning="No research fact establishes this number.",
             post_index=1,
+            supporting_source_index=-1,
         )
         for i in range(unsupported)
     ]

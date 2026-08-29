@@ -90,7 +90,7 @@ invalid input (422) and unusable configuration (503).
 cd backend; .venv\Scripts\python.exe -m pytest tests/
 ```
 
-171 tests, no network calls and no API key required - both the LLM and search
+190 tests, no network calls and no API key required - both the LLM and search
 providers are stubbed throughout.
 
 ## Configuration
@@ -130,6 +130,16 @@ calls route through FastAPI for this reason.
 LLM response schema. The Researcher cites sources by index into a list it was
 handed, and indexes that do not resolve are dropped. Fabricated citations are
 not discouraged by prompting - they are structurally impossible.
+
+**Factual cleanliness outranks editorial score when choosing the output.** A
+draft verified free of unsupported claims beats a higher-scoring draft that
+carries them. An *unchecked* draft is not clean: absence of verification is not
+evidence of correctness, so it ranks with the unclean ones.
+
+**A run never claims verification it does not have.** `completed_unverified` is
+a distinct terminal status from `completed_with_errors` - nothing crashed, but
+the claims are unsupported or unchecked - and every run returns a `warnings`
+list a client must display alongside the posts.
 
 **Both critics share one revision budget.** An Editor rejection and a Fact
 Checker rejection draw on the same `revision_count`. Separate allowances would

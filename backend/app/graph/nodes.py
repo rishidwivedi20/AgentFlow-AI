@@ -18,6 +18,7 @@ from app.agents.writer import run_writer
 from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import DraftRecord
 from app.models.enums import AgentName, WorkflowStatus
+from app.models.factcheck import VerificationStatus
 from app.services.llm_service import LLMService
 from app.services.metrics_service import AgentRunResult, GraphNode, StateUpdate, as_node
 from app.services.research_service import ResearchService
@@ -150,8 +151,25 @@ def build_fact_checker_node(llm: LLMService) -> GraphNode:
             # Unreachable: routing guarantees both exist on this path.
             raise RuntimeError("Fact checker invoked without a draft and research.")
 
+        verdict = state["editor_feedback"]
+        if verdict is None:
+            # Unreachable: this node only runs after the Editor approved.
+            raise RuntimeError("Fact checker invoked before any editor verdict.")
+
         result = await run_fact_checker(llm, research=research, posts=draft.posts)
-        return AgentRunResult(update={"fact_check": result.value}, usage=result.usage)
+        # Re-emit this revision's draft record with verification attached. The
+        # merge_drafts reducer replaces the Editor's version rather than
+        # appending a duplicate, so selection sees one candidate per revision.
+        record = DraftRecord(
+            revision=state["revision_count"],
+            posts=draft.posts,
+            evaluation=verdict,
+            fact_check=result.value,
+        )
+        return AgentRunResult(
+            update={"fact_check": result.value, "drafts": [record]},
+            usage=result.usage,
+        )
 
     return as_node(AgentName.FACT_CHECKER, handler)
 
@@ -169,9 +187,8 @@ def build_finalize_node() -> GraphNode:
 
 
 def _finalize(state: WorkflowState) -> StateUpdate:
-    """Select final posts and derive the terminal workflow status."""
+    """Select final posts, derive the terminal status, and collect warnings."""
     best = select_best_draft(state)
-    had_errors = bool(state["errors"])
 
     if best is not None:
         posts = best.posts
@@ -185,7 +202,9 @@ def _finalize(state: WorkflowState) -> StateUpdate:
         posts = []
         source = "none"
 
-    status = _derive_status(state, has_posts=bool(posts), had_errors=had_errors)
+    status = _derive_status(state, best=best, has_posts=bool(posts))
+    warnings = _collect_warnings(state, best=best, has_posts=bool(posts))
+
     logger.info(
         "Workflow finalised",
         extra={
@@ -193,30 +212,87 @@ def _finalize(state: WorkflowState) -> StateUpdate:
             "selected": source,
             "revision_count": state["revision_count"],
             "post_count": len(posts),
+            "warnings": len(warnings),
         },
     )
-    return {"final_output": posts, "workflow_status": status}
+    return {"final_output": posts, "workflow_status": status, "warnings": warnings}
 
 
 def _derive_status(
-    state: WorkflowState, *, has_posts: bool, had_errors: bool
+    state: WorkflowState, *, best: DraftRecord | None, has_posts: bool
 ) -> WorkflowStatus:
     """Map the finished run onto a terminal status.
 
-    Precedence matters: a run with no usable output is FAILED regardless of
-    why, and errors downgrade an otherwise clean completion rather than hiding.
-    Unsupported claims that survived the revision budget are reported the same
-    way - the posts are usable, but the run did not fully succeed.
+    Precedence is deliberate and deterministic:
+
+    1. No usable output at all is FAILED, whatever the cause.
+    2. An agent that crashed downgrades the run to COMPLETED_WITH_ERRORS -
+       something broke, and that outranks content judgements.
+    3. An unapproved draft means the revision budget ran out.
+    4. Output whose claims are unverified or unsupported is COMPLETED_UNVERIFIED,
+       never plain COMPLETED. Nothing crashed, but the run cannot claim the
+       content is verified.
+    5. Only a draft that was approved and verified clean is COMPLETED.
     """
     if not has_posts:
         return WorkflowStatus.FAILED
-    if had_errors:
+    if state["errors"]:
         return WorkflowStatus.COMPLETED_WITH_ERRORS
+    if not state["approved"]:
+        return WorkflowStatus.MAX_REVISIONS_REACHED
+    if best is None or not best.is_factually_clean:
+        return WorkflowStatus.COMPLETED_UNVERIFIED
+    return WorkflowStatus.COMPLETED
 
-    report = state["fact_check"]
-    if report is not None and report.has_critical_issues:
-        return WorkflowStatus.COMPLETED_WITH_ERRORS
 
-    if state["approved"]:
-        return WorkflowStatus.COMPLETED
-    return WorkflowStatus.MAX_REVISIONS_REACHED
+def _collect_warnings(
+    state: WorkflowState, *, best: DraftRecord | None, has_posts: bool
+) -> list[str]:
+    """Caveats a client must display alongside the output.
+
+    Deliberately separate from ``errors``: nothing here necessarily broke, but
+    the run cannot be presented as a clean success either. The alternative -
+    inferring caveats from a status code - is how content gets published as
+    verified when it never was.
+    """
+    warnings: list[str] = []
+    if not has_posts:
+        return warnings
+
+    verification = best.verification_status if best else VerificationStatus.NOT_CHECKED
+
+    if verification is VerificationStatus.NOT_CHECKED:
+        warnings.append(
+            "These posts were not fact checked. Claims in them are unverified."
+        )
+    elif verification is VerificationStatus.UNSUPPORTED_CLAIMS:
+        count = best.fact_check.critical_issue_count if best and best.fact_check else 0
+        warnings.append(
+            f"{count} claim(s) in these posts are not supported by the collected "
+            "research. Review them before publishing."
+        )
+    elif verification is VerificationStatus.PARTIALLY_VERIFIED:
+        warnings.append(
+            "Some claims could not be confirmed against the research, though none "
+            "were contradicted."
+        )
+
+    if state["revision_count"] >= state["max_revisions"] and not state["approved"]:
+        warnings.append(
+            f"The revision limit of {state['max_revisions']} was reached without "
+            "editorial approval. The best available draft was returned."
+        )
+    elif state["revision_count"] >= state["max_revisions"]:
+        warnings.append(
+            f"The revision limit of {state['max_revisions']} was reached. Any "
+            "remaining issues above could not be addressed."
+        )
+
+    research = state["research"]
+    if research is not None and not research.sources:
+        warnings.append(
+            "No sources were found for this topic, so the posts are not grounded "
+            "in researched material."
+        )
+
+    return warnings

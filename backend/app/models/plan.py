@@ -41,13 +41,26 @@ class ContentAngle(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    post_number: int = Field(
+        ge=1, description="Which post this brief is for, numbered from 1."
+    )
     angle: str = Field(
         min_length=1,
         description="One line naming what makes this post distinct from the others.",
     )
     content_type: ContentType = Field(description="The shape this post should take.")
+    hook_strategy: str = Field(
+        min_length=1,
+        description="How the opening should earn attention, in one line. Not the hook itself.",
+    )
     key_points: list[str] = Field(
         description="Two to four points this post should cover, drawn from the research."
+    )
+    target_audience: str = Field(
+        min_length=1, description="Who this post speaks to, specifically."
+    )
+    intended_takeaway: str = Field(
+        min_length=1, description="The one thing a reader should leave with."
     )
 
 

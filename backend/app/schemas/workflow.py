@@ -81,6 +81,10 @@ class WorkflowRunResponse(BaseModel):
         default_factory=list,
         description="Statements drawn from the sources, each citing one by index.",
     )
+    research_limitations: list[str] = Field(
+        default_factory=list,
+        description="What the research does not establish. Reported for transparency.",
+    )
     sources: list[Source] = Field(
         default_factory=list,
         description="Real search results. Never produced by a model.",
@@ -94,6 +98,14 @@ class WorkflowRunResponse(BaseModel):
     agent_metrics: list[AgentMetric] = Field(description="One entry per agent execution.")
     errors: list[WorkflowErrorRecord] = Field(
         description="Client-safe failure records. Non-empty does not always mean failure."
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Caveats to display with the output: unverified or unsupported claims, "
+            "an exhausted revision budget, missing sources. Distinct from errors - "
+            "nothing here necessarily broke."
+        ),
     )
 
 
@@ -114,9 +126,11 @@ def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
         editor_feedback=state["editor_feedback"],
         research_summary=research.summary if research else None,
         research_facts=research.facts if research else [],
+        research_limitations=research.limitations if research else [],
         sources=research.sources if research else [],
         content_plan=state["content_plan"],
         fact_check=state["fact_check"],
         agent_metrics=state["agent_metrics"],
         errors=state["errors"],
+        warnings=state["warnings"],
     )

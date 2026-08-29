@@ -85,6 +85,13 @@ class ResearchOutput(BaseModel):
     facts: list[ResearchFact] = Field(
         description="Statements extracted from the sources, each tied to one of them."
     )
+    limitations: list[str] = Field(
+        description=(
+            "What these sources do not establish: gaps, missing figures, "
+            "one-sided coverage, anything dated. Empty only when the sources "
+            "genuinely cover the topic well."
+        )
+    )
 
 
 class ResearchResult(BaseModel):
@@ -96,6 +103,10 @@ class ResearchResult(BaseModel):
 
     summary: str
     facts: list[ResearchFact]
+    limitations: list[str] = Field(
+        default_factory=list,
+        description="What the research does not establish. Surfaced to the client.",
+    )
     sources: list[Source] = Field(description="Sources actually returned by the search provider.")
 
     @property
@@ -120,4 +131,8 @@ class ResearchResult(BaseModel):
             source = self.source_for(fact)
             attribution = f" [source: {source.domain}]" if source else ""
             lines.append(f"- ({fact.kind.value}) {fact.statement}{attribution}")
+        if self.limitations:
+            lines.append("")
+            lines.append("NOT ESTABLISHED BY THESE SOURCES - do not claim any of it:")
+            lines.extend(f"- {item}" for item in self.limitations)
         return "\n".join(lines)

@@ -51,6 +51,7 @@ def test_only_unsupported_claims_are_critical():
                 verdict=ClaimVerdict.UNCERTAIN,
                 reasoning="r",
                 post_index=1,
+                supporting_source_index=-1,
             )
         ]
     )
@@ -109,7 +110,13 @@ def test_routing_does_not_mutate_state():
 def test_verdict_partitions_are_disjoint_and_complete():
     report = make_fact_check(unsupported=2, verified=3)
     report.claims.append(
-        FactCheckClaim(claim="u", verdict=ClaimVerdict.UNCERTAIN, reasoning="r", post_index=1)
+        FactCheckClaim(
+            claim="u",
+            verdict=ClaimVerdict.UNCERTAIN,
+            reasoning="r",
+            post_index=1,
+            supporting_source_index=-1,
+        )
     )
     assert len(report.verified) == 3
     assert len(report.unsupported) == 2
@@ -152,9 +159,12 @@ async def test_persistently_unsupported_claims_still_terminate(settings, run_kwa
 
     assert state["revision_count"] == 3
     assert provider.writer_calls == 4
-    # Posts are still returned, but the run is not reported as clean.
+    # Posts are still returned, but the run must not claim they are verified.
     assert state["final_output"]
-    assert state["workflow_status"] is WorkflowStatus.COMPLETED_WITH_ERRORS
+    assert state["workflow_status"] is WorkflowStatus.COMPLETED_UNVERIFIED
+    assert state["errors"] == [], "nothing crashed; this is not an error state"
+    assert any("not supported" in w for w in state["warnings"])
+    assert any("revision limit" in w for w in state["warnings"])
 
 
 async def test_both_critics_share_one_revision_budget(settings, run_kwargs):
@@ -170,7 +180,7 @@ async def test_both_critics_share_one_revision_budget(settings, run_kwargs):
 
     assert state["revision_count"] == 3, "one shared budget, not two"
     assert provider.writer_calls == 4
-    assert state["workflow_status"] is WorkflowStatus.COMPLETED_WITH_ERRORS
+    assert state["workflow_status"] is WorkflowStatus.COMPLETED_UNVERIFIED
 
 
 async def test_fact_checker_runs_only_after_approval(settings, run_kwargs):
@@ -181,3 +191,49 @@ async def test_fact_checker_runs_only_after_approval(settings, run_kwargs):
     assert state["workflow_status"] is WorkflowStatus.MAX_REVISIONS_REACHED
     assert provider.editor_calls == 4
     assert provider.fact_check_calls == 0, "never approved, so never verified"
+
+
+# --- requirement 4: the Editor must not be bypassed on a fact-check revision -
+
+
+async def test_fact_check_revision_goes_back_through_the_editor(settings, run_kwargs):
+    """The rewritten draft must be re-reviewed, not sent straight to checking.
+
+    Asserted on call counts rather than inferred: after a fact-check rejection
+    the Editor runs again before the Fact Checker sees the new draft.
+    """
+    provider = StubProvider(
+        verdicts=[make_verdict(approved=True, score=9.0)],
+        fact_checks=[make_fact_check(unsupported=1), make_fact_check()],
+    )
+    state = await run_pipeline(provider, settings, run_kwargs)
+
+    assert provider.writer_calls == 2
+    assert provider.editor_calls == 2, "the revised draft must be re-reviewed"
+    assert provider.fact_check_calls == 2
+    assert state["revision_count"] == 1
+    # Both revisions were evaluated, so both are selection candidates.
+    assert [d.revision for d in state["drafts"]] == [0, 1]
+
+
+def test_no_edge_bypasses_the_editor_from_the_writer():
+    """Structural guarantee: the Writer's only forward edge is the Editor."""
+    from app.graph.workflow import build_workflow
+    from tests.conftest import make_research, make_service
+
+    graph = build_workflow(make_service(StubProvider()), make_research()).get_graph()
+    writer_targets = {e.target for e in graph.edges if e.source == "writer"}
+    assert "fact_checker" not in writer_targets, "fact checking must never skip review"
+    assert writer_targets == {"editor", "finalize"}
+
+
+async def test_fact_checker_failure_is_recorded_as_an_error(settings, run_kwargs):
+    """Requirement 9, at the state level."""
+    provider = StubProvider(fail_on=["fact_checker"])
+    state = await run_pipeline(provider, settings, run_kwargs)
+
+    assert state["errors"], "a crashed checker must be recorded"
+    assert state["errors"][0].agent.value == "fact_checker"
+    assert state["fact_check"] is None
+    # And it must not have burned the revision budget retrying.
+    assert provider.writer_calls == 1

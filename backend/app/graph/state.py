@@ -34,6 +34,22 @@ from app.models.research import ResearchResult
 from app.models.review import EditorOutput
 
 
+def merge_drafts(
+    existing: list[DraftRecord], incoming: list[DraftRecord]
+) -> list[DraftRecord]:
+    """Append new drafts; replace an existing draft with the same revision.
+
+    Two nodes write draft records for one revision: the Editor creates it with
+    its verdict, and the Fact Checker later attaches verification to the same
+    revision. A plain append reducer would store the draft twice and let one
+    revision be counted as two candidates during selection.
+    """
+    merged = {draft.revision: draft for draft in existing}
+    for draft in incoming:
+        merged[draft.revision] = draft
+    return [merged[revision] for revision in sorted(merged)]
+
+
 class WorkflowState(TypedDict):
     """State threaded through every node of the Writer/Editor graph."""
 
@@ -90,9 +106,10 @@ class WorkflowState(TypedDict):
     """Whether the latest Editor verdict approved the draft."""
 
     # --- Accumulated history (append reducers) ----------------------------
-    drafts: Annotated[list[DraftRecord], operator.add]
-    """Every draft that reached a verdict, paired with its evaluation. Appended
-    by the editor node. Source for best-draft selection at the revision cap."""
+    drafts: Annotated[list[DraftRecord], merge_drafts]
+    """Every draft that reached a verdict, paired with its evaluation and, once
+    the Fact Checker has run on it, its verification. Source for best-draft
+    selection at the revision cap."""
 
     agent_metrics: Annotated[list[AgentMetric], operator.add]
     """One entry per agent execution, appended by the metrics wrapper."""
@@ -107,6 +124,11 @@ class WorkflowState(TypedDict):
 
     workflow_status: WorkflowStatus
     """Terminal status, set by the finalize node."""
+
+    warnings: list[str]
+    """Caveats a client must show alongside the output - unresolved claims, a
+    skipped fact check, an exhausted revision budget. Set by the finalize node.
+    Distinct from ``errors``, which record things that actually broke."""
 
 
 def initial_state(
@@ -142,18 +164,31 @@ def initial_state(
         agent_metrics=[],
         errors=[],
         final_output=[],
+        warnings=[],
         workflow_status=WorkflowStatus.PENDING,
     )
 
 
 def select_best_draft(state: WorkflowState) -> DraftRecord | None:
-    """Return the highest-scoring evaluated draft, or None if there is none.
+    """Return the best draft under a deterministic two-tier rule.
 
-    Used when the revision cap is reached without approval: the last draft is
-    not necessarily the best one, since a revision can score worse than what it
-    replaced. Ties resolve to the earliest draft, which is the one the Editor
-    scored without the benefit of later feedback.
+    Ordering, highest priority first:
+
+    1. **Factually clean drafts beat unclean ones.** A draft verified free of
+       unsupported claims is preferred over any draft carrying them, however
+       well it scored editorially. A 9.2 riddled with invented statistics is
+       not a better deliverable than a clean 8.8.
+    2. **Within a tier, the higher editorial score wins.**
+    3. **Ties resolve to the earliest draft** - the one the Editor scored
+       without the benefit of later feedback.
+
+    An *unchecked* draft is not clean: absence of verification is not evidence
+    of correctness. Unchecked drafts therefore rank with the unclean ones,
+    which matters when the Fact Checker failed or never ran.
     """
     if not state["drafts"]:
         return None
-    return max(state["drafts"], key=lambda draft: draft.quality_score)
+    return max(
+        state["drafts"],
+        key=lambda draft: (draft.is_factually_clean, draft.quality_score, -draft.revision),
+    )

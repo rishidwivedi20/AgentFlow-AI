@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.factcheck import FactCheckReport, VerificationStatus
 from app.models.review import EditorOutput
 
 
@@ -49,8 +50,33 @@ class DraftRecord(BaseModel):
     revision: int = Field(ge=0, description="0 for the initial draft, then 1, 2, 3.")
     posts: list[Post] = Field(description="The draft exactly as the Writer produced it.")
     evaluation: EditorOutput = Field(description="The Editor's verdict on this draft.")
+    fact_check: FactCheckReport | None = Field(
+        default=None,
+        description=(
+            "Verification of this draft's claims. None when the Fact Checker did "
+            "not run on it - which happens for every draft the Editor rejected, "
+            "since a draft about to be rewritten is not worth verifying."
+        ),
+    )
 
     @property
     def quality_score(self) -> float:
         """Convenience accessor used when selecting the best draft."""
         return self.evaluation.quality_score
+
+    @property
+    def verification_status(self) -> VerificationStatus:
+        """This draft's verification standing, or NOT_CHECKED."""
+        if self.fact_check is None:
+            return VerificationStatus.NOT_CHECKED
+        return self.fact_check.overall_status
+
+    @property
+    def is_factually_clean(self) -> bool:
+        """Whether the draft was checked and had no unsupported claims.
+
+        An unchecked draft is NOT clean: absence of a check is not evidence of
+        correctness, and treating it as such is exactly the false assurance the
+        Fact Checker exists to prevent.
+        """
+        return self.fact_check is not None and not self.fact_check.has_critical_issues

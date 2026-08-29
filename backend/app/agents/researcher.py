@@ -71,7 +71,10 @@ async def run_researcher(
         logger.warning("Search returned no sources", extra={"topic": topic[:80]})
         return (
             ResearchResult(
-                summary="No sources were found for this topic.", facts=[], sources=[]
+                summary="No sources were found for this topic.",
+                facts=[],
+                limitations=["No sources were retrieved, so nothing here is grounded."],
+                sources=[],
             ),
             None,
         )
@@ -87,6 +90,7 @@ async def run_researcher(
         ResearchResult(
             summary=result.value.summary,
             facts=_drop_uncitable_facts(result.value.facts, len(sources)),
+            limitations=result.value.limitations,
             sources=sources,
         ),
         result,

@@ -76,6 +76,9 @@ class WorkflowStatus(StrEnum):
 
     ``COMPLETED``               Editor approved a draft within the revision cap.
     ``MAX_REVISIONS_REACHED``   Cap hit without approval; best-scoring draft returned.
+    ``COMPLETED_UNVERIFIED``    Publishable prose, but claims are unverified or
+                                unsupported. Deliberately distinct from
+                                COMPLETED_WITH_ERRORS: nothing crashed.
     ``COMPLETED_WITH_ERRORS``   An agent failed but a usable draft still exists.
     ``FAILED``                  No usable draft was produced.
     """
@@ -84,6 +87,7 @@ class WorkflowStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     MAX_REVISIONS_REACHED = "max_revisions_reached"
+    COMPLETED_UNVERIFIED = "completed_unverified"
     COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
 

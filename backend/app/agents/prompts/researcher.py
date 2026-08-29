@@ -23,7 +23,12 @@ def build_system_prompt() -> str:
         "- 'opinion': a prediction, judgement or recommendation. Attribute it "
         "rather than stating it as established.\n\n"
         "Prefer specific statements over vague ones, and cover distinct aspects of "
-        "the topic rather than repeating the same point from several sources."
+        "the topic rather than repeating the same point from several sources.\n\n"
+        "ALSO REPORT LIMITATIONS:\n"
+        "State plainly what these sources do NOT establish - missing figures, "
+        "one-sided coverage, dated material, questions left open. Downstream "
+        "agents use this to avoid claiming more than the evidence supports, so "
+        "an honest gap is more useful than a confident omission."
     )
 
 
@@ -42,5 +47,6 @@ def build_user_prompt(*, topic: str, sources: list[Source]) -> str:
         f"TOPIC: {topic}\n\n"
         f"SEARCH RESULTS ({len(sources)} sources, numbered from 0):\n\n{rendered}\n\n"
         "Extract the key facts and opinions. Set source_index to the bracketed "
-        "number of the source each statement came from."
+        "number of the source each statement came from. Then list what these "
+        "sources do not establish."
     )
