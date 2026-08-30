@@ -15,7 +15,7 @@ from typing import Protocol
 
 from app.models.research import Source
 
-# Marker placed in OrchestrAIError.details by adapters when a failure is worth
+# Marker placed in AgentFlowError.details by adapters when a failure is worth
 # retrying. Mirrors the LLM layer's convention so the two read alike.
 RETRYABLE_DETAIL_KEY = "retryable"
 

@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 logger = logging.getLogger(__name__)
 
 
-class OrchestrAIError(Exception):
+class AgentFlowError(Exception):
     """Base class for every error this application raises deliberately.
 
     Carries the HTTP status and a machine-readable ``error_type`` so handlers
@@ -35,14 +35,14 @@ class OrchestrAIError(Exception):
         self.details = details or {}
 
 
-class ConfigurationError(OrchestrAIError):
+class ConfigurationError(AgentFlowError):
     """Required configuration is missing or invalid (e.g. absent API key)."""
 
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     error_type = "configuration_error"
 
 
-class LLMProviderError(OrchestrAIError):
+class LLMProviderError(AgentFlowError):
     """The upstream LLM provider failed, refused, or returned an error."""
 
     status_code = status.HTTP_502_BAD_GATEWAY
@@ -62,7 +62,7 @@ class LLMRateLimitError(LLMProviderError):
     error_type = "rate_limited"
 
 
-class ResearchProviderError(OrchestrAIError):
+class ResearchProviderError(AgentFlowError):
     """The web search provider failed, refused, or returned an unusable body.
 
     Distinct from ``LLMProviderError`` so a run's errors say which external
@@ -80,14 +80,14 @@ class ResearchRateLimitError(ResearchProviderError):
     error_type = "research_rate_limited"
 
 
-class LLMTimeoutError(OrchestrAIError):
+class LLMTimeoutError(AgentFlowError):
     """The LLM provider did not respond within the configured timeout."""
 
     status_code = status.HTTP_504_GATEWAY_TIMEOUT
     error_type = "llm_timeout"
 
 
-class InvalidAgentOutputError(OrchestrAIError):
+class InvalidAgentOutputError(AgentFlowError):
     """An agent returned output that failed schema validation or JSON parsing.
 
     Raised after retries are exhausted - a single malformed response is
@@ -98,7 +98,7 @@ class InvalidAgentOutputError(OrchestrAIError):
     error_type = "invalid_agent_output"
 
 
-class WorkflowError(OrchestrAIError):
+class WorkflowError(AgentFlowError):
     """The orchestration graph could not complete."""
 
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -119,7 +119,7 @@ def _envelope(error_type: str, message: str, details: dict[str, Any] | None = No
     return {"error": {"type": error_type, "message": message, "details": details or {}}}
 
 
-async def orchestrai_error_handler(_: Request, exc: OrchestrAIError) -> JSONResponse:
+async def agentflow_error_handler(_: Request, exc: AgentFlowError) -> JSONResponse:
     logger.warning(
         "Handled domain error",
         extra={"error_type": exc.error_type, "detail_keys": sorted(exc.details)},
@@ -168,7 +168,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Wire every handler onto the application."""
-    app.add_exception_handler(OrchestrAIError, orchestrai_error_handler)
+    app.add_exception_handler(AgentFlowError, agentflow_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

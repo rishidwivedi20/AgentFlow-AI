@@ -84,7 +84,7 @@ class WorkflowEvent(BaseModel):
         default=None, description="Provider-reported tokens, when the agent made an LLM call."
     )
     error_type: str | None = Field(
-        default=None, description="Machine-readable category, matching OrchestrAIError."
+        default=None, description="Machine-readable category, matching AgentFlowError."
     )
     message: str | None = Field(
         default=None, description="Client-safe explanation. Never a stack trace or a prompt."

@@ -19,7 +19,7 @@ from app.models.metrics import TokenUsage
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
-# Marker placed in OrchestrAIError.details by adapters when a failure is worth
+# Marker placed in AgentFlowError.details by adapters when a failure is worth
 # retrying (transient server-side faults). Client errors - bad key, quota
 # exhausted, malformed request - are never marked: retrying them wastes a
 # free-tier request and cannot succeed.

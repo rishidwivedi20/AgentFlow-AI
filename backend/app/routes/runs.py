@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from fastapi.responses import StreamingResponse
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import OrchestrAIError
+from app.core.exceptions import AgentFlowError
 from app.graph.workflow import run_workflow
 from app.models.events import WorkflowEvent
 from app.schemas.run import RunAcceptedResponse, RunStatusResponse
@@ -83,7 +83,7 @@ async def _execute(run_id: str, request: WorkflowRunRequest, settings: Settings)
             emitter=emitter,
         )
         registry.complete(run_id, build_workflow_response(state))
-    except OrchestrAIError as exc:
+    except AgentFlowError as exc:
         # Domain failures carry client-safe messages already.
         logger.warning("Run failed", extra={"run_id": run_id, "error_type": exc.error_type})
         registry.fail(run_id, error_type=exc.error_type, message=exc.message)

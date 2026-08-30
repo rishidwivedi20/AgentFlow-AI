@@ -23,7 +23,7 @@ export function AppHeader() {
     <header className="border-b">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
         <Link to="/" className="group">
-          <span className="font-heading text-lg font-semibold tracking-tight">OrchestrAI</span>
+          <span className="font-heading text-lg font-semibold tracking-tight">AgentFlow-AI</span>
           <span className="ml-2 text-sm text-muted-foreground">
             multi-agent content generation
           </span>

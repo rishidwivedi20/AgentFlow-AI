@@ -16,11 +16,11 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from app.core.exceptions import (
+    AgentFlowError,
     ConfigurationError,
     InvalidAgentOutputError,
     LLMProviderError,
     LLMRateLimitError,
-    OrchestrAIError,
 )
 from app.models.metrics import TokenUsage
 from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMResult, SchemaT
@@ -134,7 +134,7 @@ _AUTH_STATUS_CODES: Final = frozenset({401, 403})
 _RATE_LIMIT_STATUS_CODES: Final = frozenset({429})
 
 
-def _map_api_error(exc: errors.APIError) -> OrchestrAIError:
+def _map_api_error(exc: errors.APIError) -> AgentFlowError:
     """Translate a provider API error into a meaningful domain category.
 
     Only ``exc.code`` and ``exc.message`` are used. ``exc.details`` holds the

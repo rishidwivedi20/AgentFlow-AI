@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
-from app.core.exceptions import OrchestrAIError
+from app.core.exceptions import AgentFlowError
 from app.graph.state import WorkflowState
 from app.models.enums import AgentName, AgentStatus
 from app.models.errors import WorkflowErrorRecord
@@ -101,7 +101,7 @@ async def run_agent_with_metrics(
 
     try:
         result = await handler(state)
-    except OrchestrAIError as exc:
+    except AgentFlowError as exc:
         # Expected domain failures: LLM provider errors, timeouts, invalid
         # agent output. Message is already client-safe.
         return await _failure_update(

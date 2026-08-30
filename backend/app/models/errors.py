@@ -20,7 +20,7 @@ class WorkflowErrorRecord(BaseModel):
 
     agent: AgentName = Field(description="Node the failure occurred in.")
     error_type: str = Field(
-        description="Machine-readable category, matching OrchestrAIError.error_type."
+        description="Machine-readable category, matching AgentFlowError.error_type."
     )
     message: str = Field(description="Client-safe explanation. Never a stack trace.")
     occurred_at: datetime

@@ -21,11 +21,11 @@ from typing import Final
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
+    AgentFlowError,
     ConfigurationError,
     InvalidAgentOutputError,
     LLMProviderError,
     LLMTimeoutError,
-    OrchestrAIError,
 )
 from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMProvider, LLMResult, SchemaT
 from app.services.llm.gemini import GeminiProvider
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TEMPERATURE: Final = 0.4
 
 
-def _is_retryable(exc: OrchestrAIError) -> bool:
+def _is_retryable(exc: AgentFlowError) -> bool:
     return bool(exc.details.get(RETRYABLE_DETAIL_KEY, False))
 
 
@@ -81,7 +81,7 @@ class LLMService:
         Raises the last error once attempts are exhausted. Never returns a
         partially valid object and never loops unbounded.
         """
-        last_error: OrchestrAIError | None = None
+        last_error: AgentFlowError | None = None
 
         for attempt in range(1, self.max_attempts + 1):
             try:

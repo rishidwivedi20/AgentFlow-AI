@@ -1,4 +1,4 @@
-# OrchestrAI
+# AgentFlow-AI
 
 Multi-agent AI content generation and evaluation platform.
 

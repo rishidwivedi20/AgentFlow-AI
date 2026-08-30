@@ -1,4 +1,4 @@
-# OrchestrAI backend - runtime dependencies
+# AgentFlow-AI backend - runtime dependencies
 # Pinned to exact versions for reproducible student/portfolio setups.
 
 # --- Web framework (Phase 1) ---

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     # --- Application -------------------------------------------------------
-    app_name: str = "OrchestrAI"
+    app_name: str = "AgentFlow-AI"
     app_version: str = "0.1.0"
     app_env: Environment = "development"
     log_level: str = "INFO"
