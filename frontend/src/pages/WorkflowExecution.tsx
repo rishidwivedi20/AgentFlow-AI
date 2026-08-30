@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 
+import { ResultsPanel } from "@/components/results/ResultsPanel";
 import { ActivityLog } from "@/components/workflow/ActivityLog";
 import { WorkflowGraph } from "@/components/workflow/WorkflowGraph";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -129,11 +130,16 @@ export default function WorkflowExecution() {
       </div>
 
       {result && (
-        <p className="mt-6 text-sm text-muted-foreground">
-          {result.final_posts.length > 0
-            ? `${result.final_posts.length} post(s) produced after ${result.revision_count} revision(s). The results panel arrives in the next chunk.`
-            : "This run produced no posts."}
-        </p>
+        <section className="mt-10">
+          <h2 className="font-heading text-lg font-semibold tracking-tight">Results</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {result.final_posts.length} post(s) after {result.revision_count} revision(s), with the
+            research and verification behind them.
+          </p>
+          <div className="mt-4">
+            <ResultsPanel result={result} />
+          </div>
+        </section>
       )}
     </div>
   );
