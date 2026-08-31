@@ -9,8 +9,15 @@ run silently multiplies its token spend.
 
 **Only transient failures are retried.** Adapters mark a failure retryable when
 another attempt could plausibly succeed (a 5xx, or output that failed schema
-validation). A bad API key or an exhausted quota is surfaced immediately: a
-retry cannot succeed and would spend another free-tier request to learn that.
+validation). A bad API key is surfaced immediately: a retry cannot succeed and
+would spend another free-tier request to learn that.
+
+**Waiting is provider-signalled, never assumed.** A rate limit is retryable only
+when the adapter also reports how long to wait, which it does for a windowed
+limit that clears on its own - Groq's per-minute token budget - and never for a
+limit that does not, such as an exhausted daily quota. The service sleeps for
+exactly the reported delay; it never invents a backoff curve for a limit whose
+reset it cannot know.
 """
 
 from __future__ import annotations
@@ -27,7 +34,13 @@ from app.core.exceptions import (
     LLMProviderError,
     LLMTimeoutError,
 )
-from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMProvider, LLMResult, SchemaT
+from app.services.llm.base import (
+    RETRY_AFTER_DETAIL_KEY,
+    RETRYABLE_DETAIL_KEY,
+    LLMProvider,
+    LLMResult,
+    SchemaT,
+)
 from app.services.llm.gemini import GeminiProvider
 from app.services.llm.groq import GroqProvider
 
@@ -40,6 +53,14 @@ DEFAULT_TEMPERATURE: Final = 0.4
 
 def _is_retryable(exc: AgentFlowError) -> bool:
     return bool(exc.details.get(RETRYABLE_DETAIL_KEY, False))
+
+
+def _retry_delay(exc: AgentFlowError) -> float:
+    """Seconds to wait before retrying, or zero to retry immediately."""
+    raw = exc.details.get(RETRY_AFTER_DETAIL_KEY)
+    if isinstance(raw, int | float) and raw > 0:
+        return float(raw)
+    return 0.0
 
 
 class LLMService:
@@ -96,6 +117,7 @@ class LLMService:
                 last_error = exc
                 if not _is_retryable(exc) or attempt == self.max_attempts:
                     raise
+                delay = _retry_delay(exc)
                 logger.warning(
                     "Retrying LLM call after transient failure",
                     extra={
@@ -103,8 +125,15 @@ class LLMService:
                         "max_attempts": self.max_attempts,
                         "schema": schema.__name__,
                         "error_type": exc.error_type,
+                        "retry_after_seconds": delay or None,
                     },
                 )
+                if delay:
+                    # Deliberate wait, so it lands in the agent's recorded
+                    # latency. That is honest: the run really did take this
+                    # long, and hiding it would understate the cost of the
+                    # free tier.
+                    await asyncio.sleep(delay)
 
         # Unreachable: the loop either returns or raises. Guards against a
         # future edit silently falling through with no result.

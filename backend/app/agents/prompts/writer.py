@@ -20,7 +20,9 @@ _PLATFORM_RULES: dict[Platform, str] = {
         "- Plain text only: no markdown headings, bold markers or bullet characters "
         "other than simple dashes.\n"
         "- Close with a question or invitation that invites replies.\n"
-        "- Suggest three to five relevant hashtags, without the '#' prefix."
+        "- Suggest three to five relevant hashtags, without the '#' prefix.\n"
+        "- Hashtags belong in the 'hashtags' field only. Never write them into "
+        "the post body, and never end the body with a hashtag list."
     )
 }
 

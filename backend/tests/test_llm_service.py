@@ -11,11 +11,12 @@ from app.core.exceptions import (
     ConfigurationError,
     InvalidAgentOutputError,
     LLMProviderError,
+    LLMRateLimitError,
     LLMTimeoutError,
 )
 from app.models.metrics import TokenUsage
 from app.models.review import EditorOutput
-from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMResult
+from app.services.llm.base import RETRY_AFTER_DETAIL_KEY, RETRYABLE_DETAIL_KEY, LLMResult
 from app.services.llm_service import LLMService, build_provider
 
 VERDICT = EditorOutput(approved=True, quality_score=8.5, issues=[], feedback=[])
@@ -121,3 +122,95 @@ def test_configured_key_builds_gemini_provider():
     )
     assert provider.name == "gemini"
     assert provider.model == "m"
+
+
+# --- provider-signalled backoff --------------------------------------------
+
+
+class DelayAwareProvider:
+    """Fails with a rate limit carrying a stated delay, then succeeds."""
+
+    name = "delayed"
+    model = "delayed-model"
+
+    def __init__(self, *, failures: int, retry_after: float | None):
+        self.failures = failures
+        self.retry_after = retry_after
+        self.calls = 0
+
+    async def generate_structured(self, **_):
+        self.calls += 1
+        if self.calls <= self.failures:
+            details = {"provider": self.name}
+            if self.retry_after is not None:
+                details[RETRYABLE_DETAIL_KEY] = True
+                details[RETRY_AFTER_DETAIL_KEY] = self.retry_after
+            raise LLMRateLimitError("rate limited", details=details)
+        return LLMResult(value=VERDICT, usage=None, model=self.model)
+
+
+async def test_service_waits_the_stated_delay_before_retrying(monkeypatch):
+    """The wait is the provider's number, not a backoff curve we invented."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.services.llm_service.asyncio.sleep", fake_sleep)
+
+    provider = DelayAwareProvider(failures=1, retry_after=6.5)
+    result = await call(service(provider, retries=2))
+
+    assert result.value.quality_score == 8.5
+    assert provider.calls == 2
+    assert slept == [6.5]
+
+
+async def test_backoff_stays_within_the_attempt_budget(monkeypatch):
+    """Waiting must not buy extra attempts."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.services.llm_service.asyncio.sleep", fake_sleep)
+
+    provider = DelayAwareProvider(failures=99, retry_after=2.0)
+    with pytest.raises(LLMRateLimitError):
+        await call(service(provider, retries=2))
+
+    assert provider.calls == 3, "max_retries + 1, unchanged by the delay"
+    assert slept == [2.0, 2.0], "no sleep after the final attempt"
+
+
+async def test_rate_limit_without_a_delay_is_not_retried(monkeypatch):
+    """A daily quota does not clear by waiting - Gemini's case, unchanged."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.services.llm_service.asyncio.sleep", fake_sleep)
+
+    provider = DelayAwareProvider(failures=99, retry_after=None)
+    with pytest.raises(LLMRateLimitError):
+        await call(service(provider, retries=2))
+
+    assert provider.calls == 1
+    assert slept == []
+
+
+async def test_retryable_without_a_delay_retries_immediately(monkeypatch):
+    """Schema failures and 5xx keep their existing no-wait behaviour."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.services.llm_service.asyncio.sleep", fake_sleep)
+
+    provider = ScriptedProvider(["bad_output", "ok"])
+    await call(service(provider, retries=2))
+
+    assert provider.calls == 2
+    assert slept == [], "no delay was signalled, so none was taken"

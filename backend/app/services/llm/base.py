@@ -25,6 +25,13 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 # free-tier request and cannot succeed.
 RETRYABLE_DETAIL_KEY = "retryable"
 
+# Seconds to wait before a retry, when the provider tells us the limit will
+# clear on its own. Present only for windowed limits a wait can actually solve -
+# a per-minute token budget, not an exhausted daily quota. Its absence means
+# retry immediately or not at all; the adapter decides which by whether it also
+# marks the failure retryable.
+RETRY_AFTER_DETAIL_KEY = "retry_after_seconds"
+
 
 @dataclass(frozen=True, slots=True)
 class LLMResult(Generic[SchemaT]):

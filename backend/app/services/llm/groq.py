@@ -22,6 +22,7 @@ see :func:`_to_provider_schema`.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Final
 
 from groq import APIConnectionError, APIStatusError, APITimeoutError, AsyncGroq
@@ -35,7 +36,12 @@ from app.core.exceptions import (
     LLMRateLimitError,
 )
 from app.models.metrics import TokenUsage
-from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMResult, SchemaT
+from app.services.llm.base import (
+    RETRY_AFTER_DETAIL_KEY,
+    RETRYABLE_DETAIL_KEY,
+    LLMResult,
+    SchemaT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,42 @@ reasoning buys little. Measured on the Researcher's real prompt: the default
 effort spent 4,337 reasoning tokens for the same seven extracted facts that
 "low" produced with 19 - and the difference is what fits a run inside the free
 tier's per-minute budget."""
+
+
+MAX_RETRY_AFTER_SECONDS: Final = 90.0
+"""Upper bound on how long we will wait for a rate limit to clear.
+
+Groq's per-minute budget resets within about a minute, so a wait longer than
+this means something other than the TPM window is wrong, and blocking a run on
+it would be worse than failing."""
+
+_RETRY_AFTER_PATTERN: Final = re.compile(r"try again in\s+([0-9.]+)\s*s", re.IGNORECASE)
+
+
+def _retry_after_seconds(exc: APIStatusError) -> float | None:
+    """How long the provider says to wait, if it says at all.
+
+    The ``Retry-After`` header is authoritative; Groq also states the delay in
+    prose, which is parsed as a fallback. Returns None when neither is present,
+    which leaves the caller to treat the failure as non-retryable rather than
+    guessing a duration.
+    """
+    header = None
+    response = getattr(exc, "response", None)
+    if response is not None:
+        header = response.headers.get("retry-after")
+
+    if header:
+        try:
+            return min(float(header), MAX_RETRY_AFTER_SECONDS)
+        except ValueError:
+            pass  # some servers send an HTTP-date; fall through to the message
+
+    match = _RETRY_AFTER_PATTERN.search(str(getattr(exc, "message", "")))
+    if match:
+        return min(float(match.group(1)), MAX_RETRY_AFTER_SECONDS)
+
+    return None
 
 
 def _strip_unsupported(node: Any) -> Any:
@@ -120,6 +162,16 @@ def _extract_usage(response: Any) -> TokenUsage | None:
     )
 
 
+def _error_code(exc: APIStatusError) -> str:
+    """The provider's machine-readable error code, or an empty string."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            return str(error.get("code") or "")
+    return ""
+
+
 def _map_api_error(exc: APIStatusError) -> AgentFlowError:
     """Translate a provider API error into a meaningful domain category.
 
@@ -129,6 +181,17 @@ def _map_api_error(exc: APIStatusError) -> AgentFlowError:
     """
     code = exc.status_code
 
+    # Strict decoding failed to produce parsable JSON. That is the model
+    # failing at its task, not the provider failing at its own - so it belongs
+    # in the same category as a response that fails our schema, and is worth
+    # another sample. Groq reports it as a 400, which would otherwise be
+    # classified as a permanent client error.
+    if _error_code(exc) == "json_validate_failed":
+        return InvalidAgentOutputError(
+            "Groq could not produce output matching the requested schema.",
+            details={RETRYABLE_DETAIL_KEY: True, "provider": PROVIDER_NAME, "status": code},
+        )
+
     if code == 413:
         return LLMProviderError(
             "The request exceeded Groq's per-minute token budget. Reduce "
@@ -137,10 +200,19 @@ def _map_api_error(exc: APIStatusError) -> AgentFlowError:
         )
 
     if code == 429:
+        # Groq's binding free-tier limit is tokens per minute, and that window
+        # clears on its own - unlike a daily quota, where waiting is pointless.
+        # Marked retryable only when the provider actually tells us how long,
+        # so we never invent a delay.
+        wait = _retry_after_seconds(exc)
+        details: dict[str, Any] = {"provider": PROVIDER_NAME, "status": code}
+        if wait is not None:
+            details[RETRYABLE_DETAIL_KEY] = True
+            details[RETRY_AFTER_DETAIL_KEY] = wait
         return LLMRateLimitError(
-            "Groq rate limit reached. The free tier allows 30 requests per minute "
-            "and 1,000 per day.",
-            details={"provider": PROVIDER_NAME, "status": code},
+            "Groq rate limit reached. The free tier allows 30 requests per minute, "
+            "8,000 tokens per minute and 1,000 requests per day.",
+            details=details,
         )
 
     if code in _AUTH_STATUS_CODES:

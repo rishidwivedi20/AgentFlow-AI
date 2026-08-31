@@ -20,8 +20,9 @@ from app.models.factcheck import FactCheckClaim, FactCheckReport
 from app.models.plan import ContentAngle, ContentPlan
 from app.models.research import ResearchFact, ResearchOutput
 from app.models.review import EditorIssue, EditorOutput
-from app.services.llm.base import RETRYABLE_DETAIL_KEY
+from app.services.llm.base import RETRY_AFTER_DETAIL_KEY, RETRYABLE_DETAIL_KEY
 from app.services.llm.groq import (
+    MAX_RETRY_AFTER_SECONDS,
     PROVIDER_NAME,
     GroqProvider,
     _extract_usage,
@@ -184,7 +185,70 @@ def test_max_completion_tokens_is_bounded_for_the_free_tier():
 def test_rate_limit_message_states_the_actual_limits():
     message = _map_api_error(status_error(429)).message
     assert "30 requests per minute" in message
-    assert "1,000 per day" in message
+    assert "8,000 tokens per minute" in message
+    assert "1,000 requests per day" in message
+
+
+# --- rate-limit backoff -----------------------------------------------------
+
+
+def rate_limited(*, header: str | None = None, message: str = "Rate limit reached"):
+    """A 429 the way the SDK builds it, optionally carrying Retry-After."""
+    headers = {"retry-after": header} if header is not None else {}
+    response = httpx.Response(
+        429,
+        headers=headers,
+        request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+    )
+    return APIStatusError(message, response=response, body=None)
+
+
+def test_retry_after_header_makes_the_limit_retryable():
+    """Groq's per-minute window clears on its own, so waiting works."""
+    mapped = _map_api_error(rate_limited(header="7"))
+    assert mapped.details[RETRYABLE_DETAIL_KEY] is True
+    assert mapped.details[RETRY_AFTER_DETAIL_KEY] == 7.0
+
+
+def test_delay_is_parsed_from_the_message_when_no_header():
+    mapped = _map_api_error(rate_limited(message="Rate limit reached. Please try again in 6.4s."))
+    assert mapped.details[RETRY_AFTER_DETAIL_KEY] == 6.4
+
+
+def test_header_wins_over_the_message():
+    mapped = _map_api_error(rate_limited(header="12", message="try again in 3s"))
+    assert mapped.details[RETRY_AFTER_DETAIL_KEY] == 12.0
+
+
+def test_rate_limit_without_a_stated_delay_is_not_retryable():
+    """Never invent a wait for a limit whose reset we cannot know."""
+    mapped = _map_api_error(rate_limited())
+    assert mapped.details.get(RETRYABLE_DETAIL_KEY) is not True
+    assert RETRY_AFTER_DETAIL_KEY not in mapped.details
+
+
+def test_absurd_delays_are_clamped():
+    """A wait longer than the TPM window means something else is wrong."""
+    mapped = _map_api_error(rate_limited(header="86400"))
+    assert mapped.details[RETRY_AFTER_DETAIL_KEY] == MAX_RETRY_AFTER_SECONDS
+
+
+def test_http_date_retry_after_falls_back_to_the_message():
+    """Some servers send a date rather than seconds."""
+    mapped = _map_api_error(
+        rate_limited(header="Wed, 21 Oct 2026 07:28:00 GMT", message="try again in 5s")
+    )
+    assert mapped.details[RETRY_AFTER_DETAIL_KEY] == 5.0
+
+
+def test_unparsable_retry_after_leaves_the_limit_non_retryable():
+    mapped = _map_api_error(rate_limited(header="soon"))
+    assert mapped.details.get(RETRYABLE_DETAIL_KEY) is not True
+
+
+def test_other_errors_never_carry_a_delay():
+    for code in (400, 401, 413, 500):
+        assert RETRY_AFTER_DETAIL_KEY not in _map_api_error(status_error(code)).details
 
 
 # --- usage extraction -------------------------------------------------------
