@@ -65,6 +65,13 @@ _UNSUPPORTED_KEYWORDS: Final = frozenset(
 
 _AUTH_STATUS_CODES: Final = frozenset({401, 403})
 
+REASONING_EFFORT: Final = "low"
+"""Every agent here follows an explicit rubric against a fixed schema, so open
+reasoning buys little. Measured on the Researcher's real prompt: the default
+effort spent 4,337 reasoning tokens for the same seven extracted facts that
+"low" produced with 19 - and the difference is what fits a run inside the free
+tier's per-minute budget."""
+
 
 def _strip_unsupported(node: Any) -> Any:
     """Recursively drop schema keywords strict mode will not accept."""
@@ -121,6 +128,13 @@ def _map_api_error(exc: APIStatusError) -> AgentFlowError:
     internals that must not reach a client.
     """
     code = exc.status_code
+
+    if code == 413:
+        return LLMProviderError(
+            "The request exceeded Groq's per-minute token budget. Reduce "
+            "TAVILY_MAX_RESULTS or GROQ_MAX_COMPLETION_TOKENS.",
+            details={"provider": PROVIDER_NAME, "status": code},
+        )
 
     if code == 429:
         return LLMRateLimitError(
@@ -183,12 +197,13 @@ def _parse_response(response: Any, schema: type[SchemaT]) -> SchemaT | None:
 class GroqProvider:
     """Structured-output adapter over the Groq API."""
 
-    def __init__(self, *, api_key: str, model: str) -> None:
+    def __init__(self, *, api_key: str, model: str, max_completion_tokens: int) -> None:
         # max_retries=0: LLMService owns the retry policy. Leaving the SDK's
         # own retries enabled would nest one bounded loop inside another and
         # multiply the worst-case request count.
         self._client = AsyncGroq(api_key=api_key, max_retries=0)
         self._model = model
+        self._max_completion_tokens = max_completion_tokens
 
     @property
     def name(self) -> str:
@@ -223,6 +238,8 @@ class GroqProvider:
                     },
                 },
                 temperature=temperature,
+                max_completion_tokens=self._max_completion_tokens,
+                reasoning_effort=REASONING_EFFORT,
             )
         except APITimeoutError as exc:
             raise LLMProviderError(

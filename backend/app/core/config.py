@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # schema mode, which every agent in this system depends on.
     # llama-3.3-70b-versatile is available but cannot enforce a schema.
     groq_model: str = "openai/gpt-oss-20b"
+    groq_max_completion_tokens: int = Field(default=4096, ge=256, le=32768)
+    """Bounded because Groq counts prompt + this cap against the free tier's
+    8,000 tokens-per-minute ceiling, and rejects the request outright with a
+    413 when the sum exceeds it. Left unset, generation is instead truncated
+    mid-JSON and fails schema validation."""
 
     # --- Research provider (Phase 3) --------------------------------------
     # Tavily: 1,000 free credits/month, no card. https://app.tavily.com

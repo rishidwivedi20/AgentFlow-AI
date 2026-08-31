@@ -127,6 +127,7 @@ def test_conversion_does_not_mutate_the_model():
 @pytest.mark.parametrize(
     ("code", "expected", "error_type"),
     [
+        (413, LLMProviderError, "llm_provider_error"),
         (429, LLMRateLimitError, "rate_limited"),
         (401, ConfigurationError, "configuration_error"),
         (403, ConfigurationError, "configuration_error"),
@@ -146,7 +147,7 @@ def test_status_codes_map_to_meaningful_categories(code, expected, error_type):
 def test_only_server_errors_are_retryable():
     """Retrying a bad key or an exhausted quota cannot succeed."""
     assert _map_api_error(status_error(500)).details.get(RETRYABLE_DETAIL_KEY) is True
-    for code in (400, 401, 403, 429):
+    for code in (400, 401, 403, 413, 429):
         assert _map_api_error(status_error(code)).details.get(RETRYABLE_DETAIL_KEY) is not True
 
 
@@ -165,6 +166,19 @@ def test_details_never_carry_the_response_body():
             "provider",
             "status",
         }
+
+
+def test_request_too_large_names_the_settings_to_change():
+    """413 means prompt + max_completion_tokens exceeded the per-minute budget,
+    which is actionable in a way a generic provider error is not."""
+    message = _map_api_error(status_error(413)).message
+    assert "TAVILY_MAX_RESULTS" in message
+    assert "GROQ_MAX_COMPLETION_TOKENS" in message
+
+
+def test_max_completion_tokens_is_bounded_for_the_free_tier():
+    """Groq counts prompt + this cap against 8,000 tokens per minute."""
+    assert Settings(app_env="test").groq_max_completion_tokens <= 8000
 
 
 def test_rate_limit_message_states_the_actual_limits():

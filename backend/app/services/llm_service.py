@@ -159,7 +159,11 @@ def build_provider(settings: Settings) -> LLMProvider:
         return GeminiProvider(api_key=settings.active_api_key, model=settings.active_model)
 
     if settings.llm_provider == "groq":
-        return GroqProvider(api_key=settings.active_api_key, model=settings.active_model)
+        return GroqProvider(
+            api_key=settings.active_api_key,
+            model=settings.active_model,
+            max_completion_tokens=settings.groq_max_completion_tokens,
+        )
 
     # Unreachable while ProviderName is a Literal, but explicit so adding a
     # member to that Literal without an adapter fails loudly here.
