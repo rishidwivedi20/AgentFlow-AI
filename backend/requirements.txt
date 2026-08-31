@@ -19,6 +19,10 @@ langgraph==1.2.11
 # A second provider would be added as another adapter behind LLMProvider,
 # never as a direct import inside an agent.
 google-genai==2.20.0
+# Second provider behind the same LLMProvider protocol. Its free tier allows
+# far more requests per day, which is what makes repeated runs practical.
+# Every dependency it needs is already in the tree.
+groq==1.7.0
 
 # --- Research provider (Phase 3) ---
 # Tavily's REST API is a single authenticated POST, so it is called directly

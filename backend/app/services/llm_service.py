@@ -29,6 +29,7 @@ from app.core.exceptions import (
 )
 from app.services.llm.base import RETRYABLE_DETAIL_KEY, LLMProvider, LLMResult, SchemaT
 from app.services.llm.gemini import GeminiProvider
+from app.services.llm.groq import GroqProvider
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,9 @@ def build_provider(settings: Settings) -> LLMProvider:
 
     if settings.llm_provider == "gemini":
         return GeminiProvider(api_key=settings.active_api_key, model=settings.active_model)
+
+    if settings.llm_provider == "groq":
+        return GroqProvider(api_key=settings.active_api_key, model=settings.active_model)
 
     # Unreachable while ProviderName is a Literal, but explicit so adding a
     # member to that Literal without an adapter fails loudly here.

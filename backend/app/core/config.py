@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # gpt-oss models are the production Groq models supporting strict JSON
+    # schema mode, which every agent in this system depends on.
+    # llama-3.3-70b-versatile is available but cannot enforce a schema.
+    groq_model: str = "openai/gpt-oss-20b"
 
     # --- Research provider (Phase 3) --------------------------------------
     # Tavily: 1,000 free credits/month, no card. https://app.tavily.com
