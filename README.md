@@ -90,7 +90,7 @@ invalid input (422) and unusable configuration (503).
 cd backend; .venv\Scripts\python.exe -m pytest tests/
 ```
 
-190 tests, no network calls and no API key required - both the LLM and search
+314 tests, no network calls and no API key required - the LLM and search
 providers are stubbed throughout.
 
 ## Configuration
@@ -107,6 +107,9 @@ validated `Settings` object.
 | `LLM_PROVIDER` | `gemini` | `gemini` or `groq` |
 | `GEMINI_API_KEY` | — | [aistudio.google.com](https://aistudio.google.com/apikey), free tier |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | `gemini-2.5-flash` is closed to new API keys |
+| `GROQ_API_KEY` | — | [console.groq.com](https://console.groq.com), free tier, no card |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Must support strict JSON schema mode; Llama models on Groq do not |
+| `GROQ_MAX_COMPLETION_TOKENS` | `4096` | Prompt + this cap must stay under Groq's 8,000 tokens/minute |
 | `TAVILY_API_KEY` | — | [app.tavily.com](https://app.tavily.com), 1,000 free credits/month, no card |
 | `TAVILY_MAX_RESULTS` | `5` | Sources fetched per run |
 | `GROQ_API_KEY` | — | [console.groq.com](https://console.groq.com), free tier |

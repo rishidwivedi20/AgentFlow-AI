@@ -49,9 +49,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.6-flash"
     groq_api_key: str = ""
     # gpt-oss models are the production Groq models supporting strict JSON
-    # schema mode, which every agent in this system depends on.
+    # schema mode, which every agent in this system depends on;
     # llama-3.3-70b-versatile is available but cannot enforce a schema.
-    groq_model: str = "openai/gpt-oss-20b"
+    # 120b over 20b: measured against the real pipeline, 20b reliably produced a
+    # valid initial draft but failed constrained decoding on the longer revision
+    # prompt, while 120b completed every agent with no errors and earned a
+    # higher editorial score.
+    groq_model: str = "openai/gpt-oss-120b"
     groq_max_completion_tokens: int = Field(default=4096, ge=256, le=32768)
     """Bounded because Groq counts prompt + this cap against the free tier's
     8,000 tokens-per-minute ceiling, and rejects the request outright with a
