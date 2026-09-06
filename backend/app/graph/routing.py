@@ -26,6 +26,16 @@ from app.models.enums import AgentName, AgentStatus
 logger = logging.getLogger(__name__)
 
 
+class RetrievalRoute(StrEnum):
+    """Destinations after the Retriever node."""
+
+    RESEARCH = "research"
+    """Sources were found: continue, with or without retrieved evidence."""
+
+    FINALIZE = "finalize"
+    """No sources at all: there is nothing for any later agent to work from."""
+
+
 class ResearchRoute(StrEnum):
     """Destinations after the Researcher node."""
 
@@ -94,6 +104,26 @@ def _agent_failed(state: WorkflowState, agent: AgentName) -> bool:
 
 def _revisions_remain(state: WorkflowState) -> bool:
     return state["revision_count"] < state["max_revisions"]
+
+
+def route_after_retriever(state: WorkflowState) -> RetrievalRoute:
+    """Stop the run only if the search itself failed.
+
+    Gated on the node failing, not on what it found. Two non-failures are
+    deliberately allowed through:
+
+    * **Retrieval unavailable.** An exhausted embedding quota, or pages that
+      could not be extracted, leaves the run with search snippets - which is
+      exactly how it worked before Phase 5, and far better than abandoning a
+      search already paid for.
+    * **A search that legitimately matched nothing.** Since Phase 3 this
+      degrades to ungrounded content carrying an explicit warning, rather than
+      failing. That judgement is unchanged here.
+    """
+    if _agent_failed(state, AgentName.RETRIEVER):
+        logger.warning("Search failed; finalising without content")
+        return RetrievalRoute.FINALIZE
+    return RetrievalRoute.RESEARCH
 
 
 def route_after_researcher(state: WorkflowState) -> ResearchRoute:

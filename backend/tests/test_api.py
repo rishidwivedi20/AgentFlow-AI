@@ -98,6 +98,7 @@ def test_successful_run_returns_full_payload(client):
 
     # Every required observability field is present.
     assert {m["agent"] for m in body["agent_metrics"]} == {
+        "retriever",
         "researcher",
         "planner",
         "writer",

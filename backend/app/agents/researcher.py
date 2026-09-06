@@ -1,11 +1,14 @@
-"""Researcher agent: searches the web, then extracts facts from what it found.
+"""Researcher agent: extracts structured facts from the evidence it is handed.
 
-Two steps, deliberately separated. The search is a real HTTP call whose results
-are the only sources that can ever be cited; the LLM then reads those results
-and extracts statements, referencing sources by index. Because URLs never
-appear in the model's output schema, a fabricated citation is not possible -
-the worst the model can do is cite an index that does not exist, which is
-dropped here.
+Since Phase 5 the search itself belongs to the Retriever, which gathers and
+selects evidence without any LLM call. This agent does the interpreting: it
+reads what was found and extracts statements, referencing sources by index.
+The split keeps each node's metric honest, because embedding a corpus and
+reasoning over it have very different costs.
+
+Because URLs never appear in the model's output schema, a fabricated citation
+is not possible - the worst the model can do is cite an index that does not
+exist, which is dropped here.
 """
 
 from __future__ import annotations
@@ -14,10 +17,10 @@ import logging
 from typing import Final
 
 from app.agents.prompts import researcher as prompts
+from app.models.evidence import EvidenceSet
 from app.models.research import ResearchFact, ResearchOutput, ResearchResult, Source
 from app.services.llm.base import LLMResult
 from app.services.llm_service import LLMService
-from app.services.research_service import ResearchService
 
 logger = logging.getLogger(__name__)
 
@@ -54,21 +57,20 @@ def _drop_uncitable_facts(facts: list[ResearchFact], source_count: int) -> list[
 
 async def run_researcher(
     llm: LLMService,
-    research: ResearchService,
     *,
     topic: str,
+    sources: list[Source],
+    evidence: EvidenceSet | None = None,
 ) -> tuple[ResearchResult, LLMResult[ResearchOutput] | None]:
-    """Search the topic and extract structured research from the results.
+    """Extract structured research from sources the Retriever gathered.
 
     Returns the assembled result plus the raw LLM result, so the caller can
-    record token usage. When the search returns nothing, no LLM call is made
-    and the second element is None - there is nothing to extract from, and
+    record token usage. When no sources were found, no LLM call is made and
+    the second element is None - there is nothing to extract from, and
     spending a call to say so would be waste.
     """
-    sources: list[Source] = await research.search(build_search_query(topic))
-
     if not sources:
-        logger.warning("Search returned no sources", extra={"topic": topic[:80]})
+        logger.warning("No sources to research", extra={"topic": topic[:80]})
         return (
             ResearchResult(
                 summary="No sources were found for this topic.",
@@ -81,7 +83,9 @@ async def run_researcher(
 
     result = await llm.generate_structured(
         system_prompt=prompts.build_system_prompt(),
-        user_prompt=prompts.build_user_prompt(topic=topic, sources=sources),
+        user_prompt=prompts.build_user_prompt(
+            topic=topic, sources=sources, evidence=evidence
+        ),
         schema=ResearchOutput,
         temperature=RESEARCHER_TEMPERATURE,
     )

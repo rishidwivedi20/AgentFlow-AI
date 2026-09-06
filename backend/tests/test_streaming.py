@@ -138,8 +138,9 @@ async def test_workflow_emits_an_ordered_lifecycle():
 
     # Each agent is started then completed, in order.
     agents = [(e.type, e.agent) for e in record.events if e.agent is not None]
-    assert agents[0] == (EventType.AGENT_STARTED, AgentName.RESEARCHER)
-    assert agents[1] == (EventType.AGENT_COMPLETED, AgentName.RESEARCHER)
+    assert agents[0] == (EventType.AGENT_STARTED, AgentName.RETRIEVER)
+    assert agents[1] == (EventType.AGENT_COMPLETED, AgentName.RETRIEVER)
+    assert agents[2] == (EventType.AGENT_STARTED, AgentName.RESEARCHER)
     assert record.events[-1].workflow_status is WorkflowStatus.COMPLETED
 
 
@@ -409,7 +410,9 @@ def test_search_failure_is_recorded_on_the_run(monkeypatch, registry):
         # The run itself completed; the workflow degraded gracefully.
         assert body["state"] == RunState.COMPLETED.value
         assert body["result"]["workflow_status"] == WorkflowStatus.FAILED.value
-        assert body["result"]["errors"][0]["agent"] == "researcher"
+        # The search belongs to the Retriever since Phase 5, so that is where
+        # a search failure is now attributed.
+        assert body["result"]["errors"][0]["agent"] == "retriever"
     finally:
         app.dependency_overrides.clear()
 

@@ -19,13 +19,23 @@ from app.core.exceptions import (
     ResearchProviderError,
     ResearchRateLimitError,
 )
-from app.models.research import Source
+from app.models.evidence import SourceDocument
+from app.models.research import SearchResults, Source
 from app.services.research.base import RETRYABLE_DETAIL_KEY
 
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME: Final = "tavily"
 _ENDPOINT: Final = "https://api.tavily.com/search"
+
+SNIPPET_TIMEOUT_SECONDS: Final = 20.0
+"""Ample for a snippet-only search, which Tavily answers from its index."""
+
+PAGE_TEXT_TIMEOUT_SECONDS: Final = 90.0
+"""Requesting page text makes Tavily fetch and extract each result live, which
+is a different order of work. Measured: five results with page text exceeded
+the 20s snippet budget outright, while the same query without it returned in a
+few seconds. Generous on purpose - a timeout here costs the run its sources."""
 
 
 def _map_status(status_code: int, detail: str) -> ResearchProviderError | ConfigurationError:
@@ -60,31 +70,45 @@ def _map_status(status_code: int, detail: str) -> ResearchProviderError | Config
     )
 
 
-def _to_sources(payload: dict[str, Any]) -> list[Source]:
-    """Build Source objects from the response body.
+def _to_results(payload: dict[str, Any]) -> SearchResults:
+    """Build sources, and their page text where present, from the response body.
 
     Individual malformed results are skipped rather than failing the search: a
     single result missing a URL should not lose the other four. A result that
     cannot be validated simply does not become a citable source.
+
+    ``raw_content`` is absent whenever Tavily could not extract the page - a
+    PDF, a paywall, a JavaScript-only site. That is normal, not an error: the
+    source stays citable through its snippet and contributes no chunks.
     """
     sources: list[Source] = []
+    documents: list[SourceDocument] = []
     for raw in payload.get("results") or []:
         if not isinstance(raw, dict):
             continue
         try:
-            sources.append(
-                Source(
-                    title=str(raw.get("title") or "").strip() or "Untitled",
-                    url=raw.get("url"),
-                    snippet=str(raw.get("content") or "").strip(),
-                )
+            source = Source(
+                title=str(raw.get("title") or "").strip() or "Untitled",
+                url=raw.get("url"),
+                snippet=str(raw.get("content") or "").strip(),
             )
         except ValidationError:
             logger.warning(
                 "Skipping unusable search result",
                 extra={"provider": PROVIDER_NAME, "url": str(raw.get("url"))[:120]},
             )
-    return sources
+            continue
+
+        # The index is assigned here, after the result is known to be citable,
+        # so a skipped result never leaves a gap that shifts every later index.
+        page_text = str(raw.get("raw_content") or "").strip()
+        if page_text:
+            documents.append(
+                SourceDocument(source_index=len(sources), text=page_text)
+            )
+        sources.append(source)
+
+    return SearchResults(sources=sources, documents=documents)
 
 
 class TavilyProvider:
@@ -95,17 +119,21 @@ class TavilyProvider:
         *,
         api_key: str,
         search_depth: str = "basic",
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = SNIPPET_TIMEOUT_SECONDS,
+        page_text_timeout_seconds: float = PAGE_TEXT_TIMEOUT_SECONDS,
     ) -> None:
         self._api_key = api_key
         self._search_depth = search_depth
         self._timeout_seconds = timeout_seconds
+        self._page_text_timeout_seconds = page_text_timeout_seconds
 
     @property
     def name(self) -> str:
         return PROVIDER_NAME
 
-    async def search(self, query: str, *, max_results: int) -> list[Source]:
+    async def search(
+        self, query: str, *, max_results: int, include_page_text: bool = False
+    ) -> SearchResults:
         """Execute one search and return real, validated sources."""
         body = {
             "query": query,
@@ -114,11 +142,21 @@ class TavilyProvider:
             # No generated answer: the Researcher agent extracts facts itself,
             # and an extra summary would cost credits for nothing.
             "include_answer": False,
-            "include_raw_content": False,
+            # Page text is roughly 15x the size of a snippet (measured: ~21,000
+            # characters per page against ~1,300), so it is requested only when
+            # retrieval is actually going to chunk and embed it.
+            "include_raw_content": include_page_text,
         }
 
+        # Extracting whole pages takes materially longer than returning
+        # snippets, so the budget follows the request rather than penalising
+        # snippet-only searches with a timeout they never need.
+        timeout = (
+            self._page_text_timeout_seconds if include_page_text else self._timeout_seconds
+        )
+
         try:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     _ENDPOINT,
                     json=body,
@@ -126,7 +164,7 @@ class TavilyProvider:
                 )
         except httpx.TimeoutException as exc:
             raise ResearchProviderError(
-                f"Tavily did not respond within {self._timeout_seconds:g}s.",
+                f"Tavily did not respond within {timeout:g}s.",
                 details={"provider": PROVIDER_NAME},
             ) from exc
         except httpx.HTTPError as exc:
@@ -146,9 +184,14 @@ class TavilyProvider:
                 details={"provider": PROVIDER_NAME},
             ) from exc
 
-        sources = _to_sources(payload)
+        results = _to_results(payload)
         logger.info(
             "Search completed",
-            extra={"provider": PROVIDER_NAME, "query": query[:80], "sources": len(sources)},
+            extra={
+                "provider": PROVIDER_NAME,
+                "query": query[:80],
+                "sources": len(results.sources),
+                "documents": len(results.documents),
+            },
         )
-        return sources
+        return results

@@ -30,6 +30,7 @@ from app.schemas.workflow import WorkflowRunRequest, build_workflow_response
 from app.services.event_bus import RunEventEmitter
 from app.services.llm_service import build_llm_service
 from app.services.research_service import build_research_service
+from app.services.retrieval_service import build_optional_retrieval_service
 from app.services.run_registry import RunRecord, RunRegistry, get_run_registry
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ async def _execute(run_id: str, request: WorkflowRunRequest, settings: Settings)
             number_of_posts=request.number_of_posts,
             settings=settings,
             emitter=emitter,
+            retrieval=build_optional_retrieval_service(settings),
         )
         registry.complete(run_id, build_workflow_response(state))
     except AgentFlowError as exc:

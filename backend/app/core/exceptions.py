@@ -80,6 +80,25 @@ class ResearchRateLimitError(ResearchProviderError):
     error_type = "research_rate_limited"
 
 
+class EmbeddingProviderError(AgentFlowError):
+    """The embedding provider failed, refused, or returned unusable vectors.
+
+    Kept separate from ``LLMProviderError`` even though both may be Gemini: they
+    draw on different quotas - embedding calls succeed while text generation is
+    rate limited - so collapsing them would misreport which budget is spent.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    error_type = "embedding_provider_error"
+
+
+class EmbeddingRateLimitError(EmbeddingProviderError):
+    """The embedding provider's rate or quota limit was reached."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    error_type = "embedding_rate_limited"
+
+
 class LLMTimeoutError(AgentFlowError):
     """The LLM provider did not respond within the configured timeout."""
 

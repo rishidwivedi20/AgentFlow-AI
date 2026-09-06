@@ -9,31 +9,137 @@ counter.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from app.agents.editor import run_editor
 from app.agents.fact_checker import run_fact_checker
 from app.agents.planner import run_planner
-from app.agents.researcher import run_researcher
+from app.agents.researcher import build_search_query, run_researcher
 from app.agents.writer import run_writer
+from app.core.exceptions import AgentFlowError
 from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import DraftRecord
 from app.models.enums import AgentName, WorkflowStatus
+from app.models.errors import WorkflowErrorRecord
+from app.models.evidence import EvidenceSet, RetrievalStatus
 from app.models.factcheck import VerificationStatus
+from app.models.research import Source
 from app.services.event_bus import EventEmitter
 from app.services.llm_service import LLMService
 from app.services.metrics_service import AgentRunResult, GraphNode, StateUpdate, as_node
 from app.services.research_service import ResearchService
+from app.services.retrieval_service import RetrievalService
 
 logger = logging.getLogger(__name__)
 
 
-def build_researcher_node(
-    llm: LLMService, research: ResearchService, emitter: EventEmitter | None = None
+def build_retriever_node(
+    research: ResearchService,
+    retrieval: RetrievalService | None,
+    emitter: EventEmitter | None = None,
 ) -> GraphNode:
-    """Researcher node: search the topic and extract cited facts."""
+    """Retriever node: search, then select the most relevant page passages.
+
+    Makes no LLM call, so it reports no token usage - but it does real work
+    with real latency and its own quota, which is why it is measured as a node
+    rather than folded into the Researcher's timing.
+
+    ``retrieval`` is None when embeddings are unconfigured or switched off. The
+    search still runs; the run simply proceeds on snippets alone.
+    """
 
     async def handler(state: WorkflowState) -> AgentRunResult:
-        result, llm_result = await run_researcher(llm, research, topic=state["topic"])
+        query = build_search_query(state["topic"])
+        results = await research.search(query)
+
+        if retrieval is None:
+            return AgentRunResult(
+                update={
+                    "sources": results.sources,
+                    "evidence": EvidenceSet.not_attempted(
+                        query, "Retrieval is disabled or has no embedding key configured."
+                    ),
+                }
+            )
+
+        if not results.documents:
+            reason = (
+                "The search returned no sources."
+                if not results.sources
+                else "No page text could be extracted from the sources."
+            )
+            return AgentRunResult(
+                update={
+                    "sources": results.sources,
+                    "evidence": EvidenceSet.not_attempted(query, reason),
+                }
+            )
+
+        try:
+            evidence = await retrieval.retrieve(query=query, documents=results.documents)
+        except AgentFlowError as exc:
+            return _retrieval_degraded(query, results.sources, exc.error_type, exc.message, exc)
+        except Exception as exc:  # noqa: BLE001 - deliberate boundary
+            # Broad: retrieval failing must never cost the run its sources,
+            # whatever the cause, including an unmapped SDK network error.
+            return _retrieval_degraded(
+                query,
+                results.sources,
+                "internal_error",
+                "Retrieval failed unexpectedly.",
+                exc,
+            )
+
+        return AgentRunResult(update={"sources": results.sources, "evidence": evidence})
+
+    return as_node(AgentName.RETRIEVER, handler, emitter)
+
+
+def _retrieval_degraded(
+    query: str,
+    sources: list[Source],
+    error_type: str,
+    message: str,
+    exc: BaseException,
+) -> AgentRunResult:
+    """Keep the search's results when retrieval fails, and record why.
+
+    Not a re-raise: the metrics wrapper discards a handler's update when it
+    raises, which would drop sources the search already paid for. Appending the
+    error record here keeps the failure attributed and still downgrades the
+    run's status, while the run continues on snippets.
+    """
+    logger.warning(
+        "Retrieval failed; continuing on search snippets",
+        extra={"error_type": error_type, "sources": len(sources)},
+        exc_info=exc,
+    )
+    return AgentRunResult(
+        update={
+            "sources": sources,
+            "evidence": EvidenceSet.not_attempted(query, f"Retrieval failed: {message}"),
+            "errors": [
+                WorkflowErrorRecord(
+                    agent=AgentName.RETRIEVER,
+                    error_type=error_type,
+                    message=message,
+                    occurred_at=datetime.now(UTC),
+                )
+            ],
+        }
+    )
+
+
+def build_researcher_node(llm: LLMService, emitter: EventEmitter | None = None) -> GraphNode:
+    """Researcher node: extract cited facts from the gathered sources."""
+
+    async def handler(state: WorkflowState) -> AgentRunResult:
+        result, llm_result = await run_researcher(
+            llm,
+            topic=state["topic"],
+            sources=state["sources"],
+            evidence=state["evidence"],
+        )
         return AgentRunResult(
             update={
                 "research": result,
@@ -159,7 +265,9 @@ def build_fact_checker_node(llm: LLMService, emitter: EventEmitter | None = None
             # Unreachable: this node only runs after the Editor approved.
             raise RuntimeError("Fact checker invoked before any editor verdict.")
 
-        result = await run_fact_checker(llm, research=research, posts=draft.posts)
+        result = await run_fact_checker(
+            llm, research=research, posts=draft.posts, evidence=state["evidence"]
+        )
         # Re-emit this revision's draft record with verification attached. The
         # merge_drafts reducer replaces the Editor's version rather than
         # appending a duplicate, so selection sees one candidate per revision.
@@ -296,6 +404,17 @@ def _collect_warnings(
         warnings.append(
             "No sources were found for this topic, so the posts are not grounded "
             "in researched material."
+        )
+        # Saying anything further about evidence would be noise: with no
+        # sources there was nothing to retrieve from in the first place.
+        return warnings
+
+    evidence = state["evidence"]
+    if evidence is not None and evidence.status is RetrievalStatus.WEAK_EVIDENCE:
+        warnings.append(
+            "No passage in the sources was strongly relevant to this topic, so the "
+            "posts rest on weaker grounding than usual. This does not mean the "
+            "claims are wrong - only that these sources do not clearly discuss them."
         )
 
     return warnings

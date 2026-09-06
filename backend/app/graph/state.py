@@ -27,10 +27,11 @@ from typing import Annotated, TypedDict
 from app.models.content import DraftRecord, Post, WriterOutput
 from app.models.enums import Platform, Tone, WorkflowStatus
 from app.models.errors import WorkflowErrorRecord
+from app.models.evidence import EvidenceSet
 from app.models.factcheck import FactCheckReport
 from app.models.metrics import AgentMetric
 from app.models.plan import ContentPlan
-from app.models.research import ResearchResult
+from app.models.research import ResearchResult, Source
 from app.models.review import EditorOutput
 
 
@@ -70,6 +71,18 @@ class WorkflowState(TypedDict):
     max_revisions: int
     """Hard cap on Writer revisions. Copied from settings so a run's limit is
     recorded in its own state rather than read from global config mid-flight."""
+
+    # --- Evidence ---------------------------------------------------------
+    sources: list[Source]
+    """Every citable source the Retriever's search returned. Owned here rather
+    than only inside ``research`` because sources exist before the Researcher
+    runs, and must survive it failing - they were really found either way."""
+
+    evidence: EvidenceSet | None
+    """Passages retrieved from the sources' page text, ranked against the
+    topic. None before the Retriever runs. A set with ``NOT_ATTEMPTED`` status
+    means retrieval did not happen and says why - which is a different claim
+    from the sources containing nothing relevant."""
 
     # --- Research and planning -------------------------------------------
     research: ResearchResult | None
@@ -152,6 +165,8 @@ def initial_state(
         tone=tone,
         number_of_posts=number_of_posts,
         max_revisions=max_revisions,
+        sources=[],
+        evidence=None,
         research=None,
         research_context=research_context,
         content_plan=None,

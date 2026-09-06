@@ -13,6 +13,7 @@ from app.graph.state import WorkflowState, select_best_draft
 from app.models.content import Post
 from app.models.enums import Platform, Tone, WorkflowStatus
 from app.models.errors import WorkflowErrorRecord
+from app.models.evidence import EvidenceSet
 from app.models.factcheck import FactCheckReport
 from app.models.metrics import AgentMetric
 from app.models.plan import ContentPlan
@@ -89,6 +90,15 @@ class WorkflowRunResponse(BaseModel):
         default_factory=list,
         description="Real search results. Never produced by a model.",
     )
+    evidence: EvidenceSet | None = Field(
+        default=None,
+        description=(
+            "Passages retrieved from the sources' page text and ranked against the "
+            "topic, with the counts explaining how much corpus they were drawn "
+            "from. None on runs that predate retrieval. The chunk text is verbatim "
+            "web content: display it as quoted material, never as markup."
+        ),
+    )
     content_plan: ContentPlan | None = Field(
         default=None, description="The angle assigned to each post."
     )
@@ -127,7 +137,11 @@ def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
         research_summary=research.summary if research else None,
         research_facts=research.facts if research else [],
         research_limitations=research.limitations if research else [],
-        sources=research.sources if research else [],
+        # From state, not from ``research``: the Retriever found these, and a
+        # Researcher that failed afterwards should not erase sources that were
+        # really retrieved and are still what any fact check cites against.
+        sources=state["sources"],
+        evidence=state["evidence"],
         content_plan=state["content_plan"],
         fact_check=state["fact_check"],
         agent_metrics=state["agent_metrics"],

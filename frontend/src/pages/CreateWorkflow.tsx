@@ -105,8 +105,8 @@ export default function CreateWorkflow() {
     <div className="mx-auto max-w-2xl px-6 py-12">
       <h1 className="font-heading text-2xl font-semibold tracking-tight">Generate content</h1>
       <p className="mt-2 text-muted-foreground">
-        Five agents research the topic, plan distinct angles, write, review and fact check the
-        result. You can watch each step as it runs.
+        Six agents retrieve source passages, research the topic, plan distinct angles, write,
+        review and fact check the result. You can watch each step as it runs.
       </p>
 
       <Card className="mt-8">

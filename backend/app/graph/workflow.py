@@ -1,6 +1,7 @@
 """Assembly and execution of the multi-agent workflow.
 
-    START -> researcher -> (plan     -> planner  | finalize) -> END
+    START -> retriever  -> (research -> researcher | finalize) -> END
+             researcher -> (plan     -> planner  | finalize)
              planner    -> (write    -> writer   | finalize)
              writer     -> (review   -> editor   | finalize)
              editor     -> (revise   -> writer   |
@@ -28,6 +29,7 @@ from app.graph.nodes import (
     build_finalize_node,
     build_planner_node,
     build_researcher_node,
+    build_retriever_node,
     build_writer_node,
 )
 from app.graph.routing import (
@@ -35,11 +37,13 @@ from app.graph.routing import (
     FactCheckRoute,
     PlanRoute,
     ResearchRoute,
+    RetrievalRoute,
     WriterRoute,
     route_after_editor,
     route_after_fact_check,
     route_after_planner,
     route_after_researcher,
+    route_after_retriever,
     route_after_writer,
 )
 from app.graph.state import WorkflowState, initial_state
@@ -48,15 +52,17 @@ from app.models.events import EventType
 from app.services.event_bus import EventEmitter, NullEmitter
 from app.services.llm_service import LLMService
 from app.services.research_service import ResearchService
+from app.services.retrieval_service import RetrievalService
 
 logger = logging.getLogger(__name__)
 
 # Nodes executed per revision cycle: writer, editor, fact_checker.
 _STEPS_PER_ITERATION: Final = 3
-# Researcher, planner and finalize run once each, plus headroom for LangGraph's
-# own bookkeeping. Deliberately looser than the routing predicates need: this
-# is a backstop that should never trip, not the mechanism enforcing the cap.
-_FIXED_STEPS: Final = 3
+# Retriever, researcher, planner and finalize run once each, plus headroom for
+# LangGraph's own bookkeeping. Deliberately looser than the routing predicates
+# need: this is a backstop that should never trip, not the mechanism enforcing
+# the cap.
+_FIXED_STEPS: Final = 4
 _RECURSION_HEADROOM: Final = 6
 
 
@@ -69,16 +75,23 @@ def build_workflow(
     llm: LLMService,
     research: ResearchService,
     emitter: EventEmitter | None = None,
+    retrieval: RetrievalService | None = None,
 ) -> CompiledStateGraph:
     """Construct and compile the graph.
 
     ``emitter`` is optional and defaults to discarding events, so the
     synchronous endpoint and every existing test behave exactly as before.
+
+    ``retrieval`` is optional too. Passing None keeps the Retriever node in the
+    graph - it still searches - but skips embedding, so the run proceeds on
+    search snippets. The node is never removed: a graph whose shape changed
+    with configuration would make the visualisation a lie about what ran.
     """
     builder = StateGraph(WorkflowState)
 
     # Node ids are the AgentName values, so a client can map a metric's
     # `agent` field onto a graph node without a translation table.
+    retriever = AgentName.RETRIEVER.value
     researcher = AgentName.RESEARCHER.value
     planner = AgentName.PLANNER.value
     writer = AgentName.WRITER.value
@@ -86,15 +99,23 @@ def build_workflow(
     fact_checker = AgentName.FACT_CHECKER.value
     finalize = AgentName.FINALIZE.value
 
-    builder.add_node(researcher, build_researcher_node(llm, research, emitter))
+    builder.add_node(retriever, build_retriever_node(research, retrieval, emitter))
+    builder.add_node(researcher, build_researcher_node(llm, emitter))
     builder.add_node(planner, build_planner_node(llm, emitter))
     builder.add_node(writer, build_writer_node(llm, emitter))
     builder.add_node(editor, build_editor_node(llm, emitter))
     builder.add_node(fact_checker, build_fact_checker_node(llm, emitter))
     builder.add_node(finalize, build_finalize_node(emitter))
 
-    builder.add_edge(START, researcher)
+    builder.add_edge(START, retriever)
 
+    # Only a failed search ends the run. Retrieval being unavailable does not:
+    # snippets still ground the Writer and the Fact Checker.
+    builder.add_conditional_edges(
+        retriever,
+        route_after_retriever,
+        {RetrievalRoute.RESEARCH: researcher, RetrievalRoute.FINALIZE: finalize},
+    )
     # Research and planning are prerequisites: without either, downstream
     # agents would work from nothing.
     builder.add_conditional_edges(
@@ -143,6 +164,7 @@ async def run_workflow(
     number_of_posts: int,
     settings: Settings | None = None,
     emitter: EventEmitter | None = None,
+    retrieval: RetrievalService | None = None,
 ) -> WorkflowState:
     """Execute one workflow run and return its final state.
 
@@ -152,7 +174,7 @@ async def run_workflow(
     """
     resolved = settings or get_settings()
     events = emitter or NullEmitter()
-    graph = build_workflow(llm, research, events)
+    graph = build_workflow(llm, research, events, retrieval)
     state = initial_state(
         topic=topic,
         platform=platform,

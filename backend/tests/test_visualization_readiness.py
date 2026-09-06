@@ -28,7 +28,8 @@ def test_graph_topology_is_self_describing():
     graph = _graph()
     edges = {(e.source, e.target) for e in graph.edges}
 
-    assert ("__start__", "researcher") in edges
+    assert ("__start__", "retriever") in edges
+    assert ("retriever", "researcher") in edges
     assert ("researcher", "planner") in edges
     assert ("planner", "writer") in edges
     assert ("writer", "editor") in edges
@@ -59,6 +60,7 @@ async def test_metrics_reconstruct_the_loop_in_order(settings, run_kwargs):
 
     metrics = state["agent_metrics"]
     assert [m.agent.value for m in metrics] == [
+        "retriever",
         "researcher",
         "planner",
         "writer",

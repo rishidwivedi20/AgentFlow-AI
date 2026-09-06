@@ -12,8 +12,23 @@ from app.core.exceptions import (
     ResearchProviderError,
     ResearchRateLimitError,
 )
-from app.models.research import ResearchFact, ResearchOutput, ResearchResult, Source, StatementKind
-from app.services.research.tavily import PROVIDER_NAME, _map_status, _to_sources
+from app.models.evidence import SourceDocument
+from app.models.research import (
+    ResearchFact,
+    ResearchOutput,
+    ResearchResult,
+    SearchResults,
+    Source,
+    StatementKind,
+)
+from app.services.research import tavily
+from app.services.research.tavily import (
+    PAGE_TEXT_TIMEOUT_SECONDS,
+    PROVIDER_NAME,
+    SNIPPET_TIMEOUT_SECONDS,
+    _map_status,
+    _to_results,
+)
 from app.services.research_service import (
     ResearchService,
     _deduplicate,
@@ -49,24 +64,19 @@ def test_all_facts_kept_when_indexes_are_valid():
 
 
 async def test_researcher_attaches_real_sources():
-    search = StubSearchProvider(sources=make_sources(3))
     result, llm_result = await run_researcher(
-        make_service(StubProvider()), ResearchService(search, max_results=5), topic="AI"
+        make_service(StubProvider()), topic="AI", sources=make_sources(3)
     )
     assert isinstance(result, ResearchResult)
     assert len(result.sources) == 3
     assert all(str(s.url).startswith("https://") for s in result.sources)
     assert llm_result is not None
-    assert search.calls == 1
 
 
 async def test_no_search_results_skips_the_llm_call():
     """Nothing to extract from, so spending a call to say so would be waste."""
-    search = StubSearchProvider(sources=[])
     provider = StubProvider()
-    result, llm_result = await run_researcher(
-        make_service(provider), ResearchService(search, max_results=5), topic="AI"
-    )
+    result, llm_result = await run_researcher(make_service(provider), topic="AI", sources=[])
     assert result.sources == []
     assert result.facts == []
     assert llm_result is None
@@ -119,7 +129,7 @@ def test_writer_context_attributes_facts_to_domains():
 
 
 def test_malformed_results_are_skipped_not_fatal():
-    sources = _to_sources(
+    sources = _to_results(
         {
             "results": [
                 {"title": "Good", "url": "https://example.com/a", "content": "x"},
@@ -128,7 +138,7 @@ def test_malformed_results_are_skipped_not_fatal():
                 {"url": "https://example.com/b", "content": "no title"},
             ]
         }
-    )
+    ).sources
     assert [str(s.url) for s in sources] == [
         "https://example.com/a",
         "https://example.com/b",
@@ -137,8 +147,8 @@ def test_malformed_results_are_skipped_not_fatal():
 
 
 def test_empty_response_yields_no_sources():
-    assert _to_sources({}) == []
-    assert _to_sources({"results": []}) == []
+    assert _to_results({}).sources == []
+    assert _to_results({"results": []}).sources == []
 
 
 @pytest.mark.parametrize(
@@ -169,6 +179,39 @@ def test_search_errors_never_leak_the_response_body():
         assert set(_map_status(code, "detail").details) <= {"retryable", "provider", "status"}
 
 
+@pytest.mark.parametrize(
+    ("include_page_text", "expected"),
+    [(False, SNIPPET_TIMEOUT_SECONDS), (True, PAGE_TEXT_TIMEOUT_SECONDS)],
+)
+async def test_the_timeout_follows_what_the_search_asks_for(
+    monkeypatch, include_page_text, expected
+):
+    """Page text makes Tavily fetch and extract each result live. Measured: five
+    results with page text blew straight through the 20s snippet budget, which
+    cost the run every source it had already paid for."""
+    captured: dict[str, float] = {}
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, *_, **__):
+            raise httpx.ReadTimeout("too slow")
+
+    monkeypatch.setattr(tavily.httpx, "AsyncClient", FakeClient)
+    provider = tavily.TavilyProvider(api_key="test-key")
+
+    with pytest.raises(ResearchProviderError, match=f"within {expected:g}s"):
+        await provider.search("q", max_results=3, include_page_text=include_page_text)
+    assert captured["timeout"] == expected
+
+
 def test_tavily_uses_bearer_auth_not_a_query_parameter():
     """A key in a URL leaks into logs and proxies."""
     import inspect
@@ -191,18 +234,93 @@ def test_duplicate_urls_are_collapsed():
         Source(title="A again", url="https://example.com/x", snippet="2"),
         Source(title="B", url="https://example.com/y", snippet="3"),
     ]
-    unique = _deduplicate(duplicated)
+    unique = _deduplicate(SearchResults(sources=duplicated)).sources
     assert [str(s.url) for s in unique] == ["https://example.com/x", "https://example.com/y"]
+
+
+def test_deduplication_repoints_documents_at_their_sources_new_index():
+    """Documents address sources by position. If collapsing the source list did
+    not remap them, a page's text would be attributed to a different site - the
+    exact failure the provenance design exists to prevent, and a silent one."""
+    results = SearchResults(
+        sources=[
+            Source(title="A", url="https://example.com/x", snippet="1"),
+            Source(title="A again", url="https://example.com/x", snippet="2"),
+            Source(title="B", url="https://example.com/y", snippet="3"),
+        ],
+        documents=[SourceDocument(source_index=2, text="text belonging to B")],
+    )
+    deduped = _deduplicate(results)
+    assert len(deduped.sources) == 2
+    # B moved from position 2 to position 1.
+    assert deduped.documents[0].source_index == 1
+    assert str(deduped.sources[1].url) == "https://example.com/y"
+
+
+def test_a_duplicates_page_text_is_kept_and_pointed_at_the_survivor():
+    """The two entries can differ in what the provider managed to extract."""
+    results = SearchResults(
+        sources=[
+            Source(title="A", url="https://example.com/x", snippet="1"),
+            Source(title="A again", url="https://example.com/x", snippet="2"),
+        ],
+        documents=[SourceDocument(source_index=1, text="page text")],
+    )
+    deduped = _deduplicate(results)
+    assert len(deduped.sources) == 1
+    assert deduped.documents[0].source_index == 0
+
+
+def test_page_text_is_parsed_only_when_the_provider_returns_it():
+    """Absent raw_content is normal - a PDF, a paywall, a JS-only site - and
+    must leave the source citable rather than failing the search."""
+    results = _to_results(
+        {
+            "results": [
+                {"title": "A", "url": "https://example.com/a", "content": "snip"},
+                {
+                    "title": "B",
+                    "url": "https://example.com/b",
+                    "content": "snip",
+                    "raw_content": "the full page text",
+                },
+            ]
+        }
+    )
+    assert len(results.sources) == 2
+    assert len(results.documents) == 1
+    assert results.documents[0].source_index == 1
+    assert results.documents[0].text == "the full page text"
+
+
+def test_a_skipped_result_does_not_shift_later_document_indexes():
+    """The index is assigned after a result is known citable, so an unusable
+    result leaves no gap for every later document to be misattributed by."""
+    results = _to_results(
+        {
+            "results": [
+                {"title": "Bad", "url": "not-a-url", "raw_content": "orphan"},
+                {
+                    "title": "Good",
+                    "url": "https://example.com/b",
+                    "raw_content": "real page",
+                },
+            ]
+        }
+    )
+    assert len(results.sources) == 1
+    assert results.documents[0].source_index == 0
+    assert results.documents[0].text == "real page"
 
 
 def test_provider_ranking_is_preserved_by_deduplication():
     sources = make_sources(4)
-    assert _deduplicate(sources) == sources
+    assert _deduplicate(SearchResults(sources=sources)).sources == sources
 
 
 async def test_service_caps_results_at_configured_max():
     service = ResearchService(StubSearchProvider(sources=make_sources(10)), max_results=3)
-    assert len(await service.search("q")) == 3
+    assert len((await service.search("q")).sources) == 3
 
 
 def test_missing_search_key_raises_configuration_error():

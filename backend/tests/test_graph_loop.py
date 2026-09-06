@@ -120,6 +120,7 @@ async def test_metrics_recorded_for_every_execution(settings, run_kwargs):
 
     agents = [m.agent for m in state["agent_metrics"]]
     assert agents == [
+        AgentName.RETRIEVER,
         AgentName.RESEARCHER,
         AgentName.PLANNER,
         AgentName.WRITER,
@@ -132,11 +133,13 @@ async def test_metrics_recorded_for_every_execution(settings, run_kwargs):
     assert all(m.latency_seconds >= 0 for m in state["agent_metrics"])
     assert all(m.status is AgentStatus.COMPLETED for m in state["agent_metrics"])
 
-    llm_metrics = [m for m in state["agent_metrics"] if m.agent is not AgentName.FINALIZE]
+    # The retriever and finalize make no LLM call, so they must report no token
+    # usage at all. Zero would read as "this was free", which is a different
+    # claim from "no tokens were spent here".
+    no_llm = {AgentName.RETRIEVER, AgentName.FINALIZE}
+    llm_metrics = [m for m in state["agent_metrics"] if m.agent not in no_llm]
     assert all(m.usage is not None and m.usage.total_tokens == 350 for m in llm_metrics)
-    # finalize makes no LLM call, so it must not claim token usage.
-    finalize_metric = state["agent_metrics"][-1]
-    assert finalize_metric.usage is None
+    assert all(m.usage is None for m in state["agent_metrics"] if m.agent in no_llm)
 
 
 async def test_failed_metric_carries_the_error(settings, run_kwargs):

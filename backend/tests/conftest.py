@@ -18,6 +18,7 @@ import pytest
 from app.core.config import Settings
 from app.models.content import Post, WriterOutput
 from app.models.enums import Platform, Tone
+from app.models.evidence import SourceDocument
 from app.models.factcheck import ClaimVerdict, FactCheckClaim, FactCheckReport
 from app.models.metrics import TokenUsage
 from app.models.plan import ContentAngle, ContentPlan, ContentType
@@ -25,6 +26,7 @@ from app.models.research import (
     ResearchFact,
     ResearchOutput,
     ResearchResult,
+    SearchResults,
     Source,
     StatementKind,
 )
@@ -32,6 +34,7 @@ from app.models.review import EditorIssue, EditorOutput, IssueSeverity, ReviewDi
 from app.services.llm.base import LLMResult
 from app.services.llm_service import LLMService
 from app.services.research_service import ResearchService
+from app.services.retrieval_service import RetrievalService
 
 STUB_MODEL = "stub-model"
 
@@ -152,20 +155,92 @@ def make_usage() -> TokenUsage:
 
 
 class StubSearchProvider:
-    """Returns fixed sources, or raises to simulate a search failure."""
+    """Returns fixed sources, or raises to simulate a search failure.
+
+    ``page_text`` supplies document text per source index, so a test can decide
+    which results carry extractable pages - the real provider returns none for
+    a PDF or a paywall.
+    """
 
     name = "stub-search"
 
-    def __init__(self, *, sources: list[Source] | None = None, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        sources: list[Source] | None = None,
+        fail: bool = False,
+        page_text: dict[int, str] | None = None,
+    ) -> None:
         self._sources = make_sources() if sources is None else sources
         self._fail = fail
+        self._page_text = page_text or {}
         self.calls = 0
+        self.include_page_text: bool | None = None
 
-    async def search(self, query: str, *, max_results: int) -> list[Source]:
+    async def search(
+        self, query: str, *, max_results: int, include_page_text: bool = False
+    ) -> SearchResults:
         self.calls += 1
+        self.include_page_text = include_page_text
         if self._fail:
             raise RuntimeError("stub search failure")
-        return self._sources[:max_results]
+        sources = self._sources[:max_results]
+        documents = (
+            [
+                SourceDocument(source_index=index, text=text)
+                for index, text in sorted(self._page_text.items())
+                if index < len(sources)
+            ]
+            if include_page_text
+            else []
+        )
+        return SearchResults(sources=sources, documents=documents)
+
+
+class StubEmbeddingProvider:
+    """Deterministic bag-of-words embeddings over a tiny fixed vocabulary.
+
+    Text becomes a count vector over ``VOCAB``, so cosine similarity behaves
+    the way a real embedder roughly does - shared words score high, disjoint
+    text scores zero - while staying exactly predictable in a test.
+
+    ``scale`` multiplies document vectors. Real Gemini vectors are *not* unit
+    length at the truncated widths this project uses, so tests use it to prove
+    the ranking does not depend on magnitude.
+    """
+
+    name = "stub-embeddings"
+    model = "stub-embedding-model"
+
+    VOCAB = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+
+    def __init__(self, *, scale: float = 1.0, fail: bool = False, drop_last: bool = False) -> None:
+        self._scale = scale
+        self._fail = fail
+        self._drop_last = drop_last
+        self.document_calls = 0
+        self.query_calls = 0
+
+    @property
+    def dimensions(self) -> int:
+        return len(self.VOCAB)
+
+    def _vector(self, text: str) -> list[float]:
+        words = text.casefold().split()
+        return [float(words.count(term)) for term in self.VOCAB]
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.document_calls += 1
+        if self._fail:
+            raise RuntimeError("stub embedding failure")
+        vectors = [[value * self._scale for value in self._vector(text)] for text in texts]
+        return vectors[:-1] if self._drop_last and vectors else vectors
+
+    async def embed_query(self, text: str) -> list[float]:
+        self.query_calls += 1
+        if self._fail:
+            raise RuntimeError("stub embedding failure")
+        return self._vector(text)
 
 
 class StubProvider:
@@ -198,6 +273,13 @@ class StubProvider:
         self.writer_calls = 0
         self.editor_calls = 0
         self.fact_check_calls = 0
+        self.prompts: dict[str, list[str]] = {}
+        """User prompts by agent, so a test can assert what each agent was
+        actually shown - which is the only way to check that untrusted text
+        reaches some agents and not others."""
+
+    def _record(self, agent: str, kwargs: dict) -> None:
+        self.prompts.setdefault(agent, []).append(str(kwargs.get("user_prompt", "")))
 
     @staticmethod
     def _pick(items: list, index: int):
@@ -206,19 +288,22 @@ class StubProvider:
     def _result(self, value) -> LLMResult:
         return LLMResult(value=value, usage=make_usage(), model=STUB_MODEL)
 
-    async def generate_structured(self, *, schema, **_: object) -> LLMResult:
+    async def generate_structured(self, *, schema, **kwargs: object) -> LLMResult:
         if schema is ResearchOutput:
             self.researcher_calls += 1
+            self._record("researcher", kwargs)
             self._maybe_fail("researcher")
             return self._result(make_research_output())
 
         if schema is ContentPlan:
             self.planner_calls += 1
+            self._record("planner", kwargs)
             self._maybe_fail("planner")
             return self._result(make_plan(self._angle_count))
 
         if schema is WriterOutput:
             self.writer_calls += 1
+            self._record("writer", kwargs)
             self._maybe_fail("writer")
             return self._result(
                 WriterOutput(posts=make_posts(self._post_count, tag=f"r{self.writer_calls}"))
@@ -226,10 +311,12 @@ class StubProvider:
 
         if schema is FactCheckReport:
             self.fact_check_calls += 1
+            self._record("fact_checker", kwargs)
             self._maybe_fail("fact_checker")
             return self._result(self._pick(self._fact_checks, self.fact_check_calls - 1))
 
         self.editor_calls += 1
+        self._record("editor", kwargs)
         self._maybe_fail("editor")
         return self._result(self._pick(self._verdicts, self.editor_calls - 1))
 
@@ -246,17 +333,62 @@ def make_service(provider: StubProvider, *, timeout: float = 5.0, retries: int =
 
 
 def make_research(
-    provider: StubSearchProvider | None = None, *, max_results: int = 5
+    provider: StubSearchProvider | None = None,
+    *,
+    max_results: int = 5,
+    include_page_text: bool = False,
 ) -> ResearchService:
-    return ResearchService(provider or StubSearchProvider(), max_results=max_results)
+    return ResearchService(
+        provider or StubSearchProvider(),
+        max_results=max_results,
+        include_page_text=include_page_text,
+    )
 
 
-async def run_pipeline(provider, settings, run_kwargs, *, search=None):
-    """Execute a full workflow run with stubbed services."""
+def make_retrieval(
+    provider: StubEmbeddingProvider | None = None,
+    *,
+    chunk_size: int = 200,
+    chunk_overlap: int = 20,
+    top_k: int = 4,
+    min_similarity: float = 0.1,
+    max_chunks_per_source: int = 2,
+    max_chunks_per_run: int = 200,
+    min_chunk_chars: int = 10,
+) -> RetrievalService:
+    """A retrieval service sized for short test documents, not real pages.
+
+    ``min_chunk_chars`` is well below the production default: the real 80-char
+    floor prunes page furniture from a scraped page, and would prune every
+    fixture in these tests along with it.
+    """
+    return RetrievalService(
+        provider or StubEmbeddingProvider(),
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        top_k=top_k,
+        min_similarity=min_similarity,
+        max_chunks_per_source=max_chunks_per_source,
+        max_chunks_per_run=max_chunks_per_run,
+        min_chunk_chars=min_chunk_chars,
+    )
+
+
+async def run_pipeline(provider, settings, run_kwargs, *, search=None, retrieval=None):
+    """Execute a full workflow run with stubbed services.
+
+    ``retrieval`` defaults to None, which exercises the degraded path where the
+    Retriever searches but does not embed. Tests that care about evidence pass
+    one built by :func:`make_retrieval`.
+    """
     from app.graph.workflow import run_workflow
 
     return await run_workflow(
-        make_service(provider), make_research(search), settings=settings, **run_kwargs
+        make_service(provider),
+        make_research(search, include_page_text=retrieval is not None),
+        settings=settings,
+        retrieval=retrieval,
+        **run_kwargs,
     )
 
 

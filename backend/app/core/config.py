@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/  (app/core/config.py -> app/core -> app -> backend)
@@ -68,10 +68,59 @@ class Settings(BaseSettings):
     tavily_max_results: int = Field(default=5, ge=1, le=20)
     tavily_search_depth: Literal["basic", "advanced"] = "basic"
 
+    # --- Retrieval (Phase 5) ----------------------------------------------
+    retrieval_enabled: bool = True
+    """When False the pipeline falls back to search snippets alone. Kept as a
+    switch so a run can proceed when the embedding quota is spent, and so
+    Phase 6 can measure retrieval's contribution by turning it off."""
+
+    # Always a Gemini model: Groq exposes no embeddings API, so retrieval needs
+    # GEMINI_API_KEY whatever LLM_PROVIDER is set to.
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dimensions: int = Field(default=768, ge=128, le=3072)
+    """Truncated from the model's native 3072. Comparable retrieval quality on
+    a corpus this small, at a quarter the memory."""
+
+    retrieval_chunk_size: int = Field(default=1200, ge=200, le=4000)
+    retrieval_chunk_overlap: int = Field(default=150, ge=0, le=1000)
+    retrieval_top_k: int = Field(default=8, ge=1, le=50)
+    """Eight ~300-token chunks is ~2,400 tokens of evidence, which is what fits
+    alongside a prompt and its output inside Groq's 8,000 tokens-per-minute
+    free-tier ceiling."""
+
+    retrieval_min_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
+    """Below this a chunk is treated as off-topic rather than as evidence.
+    Never as evidence that a claim is false."""
+
+    retrieval_max_chunks_per_source: int = Field(default=3, ge=1, le=20)
+    """Stops one long page filling the entire evidence budget. Relaxed
+    automatically when honouring it would leave the budget unfilled."""
+
+    retrieval_max_chunks_per_run: int = Field(default=90, ge=10, le=2000)
+    """Bounds how much corpus is embedded, and with it what a run costs. The
+    free tier allows 100 embedded passages per minute, counting items rather
+    than HTTP calls - batching saves round trips, not quota. 90 leaves room for
+    the query embedding and a second run inside the same minute."""
+
     # --- Orchestration guardrails -----------------------------------------
     max_revisions: int = Field(default=3, ge=1, le=10)
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def _check_chunk_geometry(self) -> Settings:
+        """Overlap must leave room for new content in every chunk.
+
+        Each chunk carries up to ``retrieval_chunk_overlap`` characters of the
+        previous one, so an overlap at or above the chunk size would leave no
+        budget for anything new and the chunker could not make progress.
+        """
+        if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
+            raise ValueError(
+                "retrieval_chunk_overlap must be smaller than retrieval_chunk_size "
+                f"(got {self.retrieval_chunk_overlap} >= {self.retrieval_chunk_size})"
+            )
+        return self
 
     @field_validator("log_level")
     @classmethod
@@ -123,6 +172,23 @@ class Settings(BaseSettings):
         only produce sources from model output, which would be fabricated.
         """
         return bool(self.tavily_api_key.strip())
+
+    @property
+    def embeddings_configured(self) -> bool:
+        """Whether retrieval has a usable embedding key.
+
+        Deliberately reads ``gemini_api_key`` rather than ``active_api_key``:
+        Groq has no embeddings API, so retrieval depends on Gemini's key even
+        when Gemini is not the generation provider. A Groq run without it can
+        still complete - the pipeline falls back to search snippets - but it
+        will not retrieve.
+        """
+        return bool(self.gemini_api_key.strip())
+
+    @property
+    def retrieval_available(self) -> bool:
+        """Whether retrieval is both switched on and able to run."""
+        return self.retrieval_enabled and self.embeddings_configured
 
     @property
     def is_production(self) -> bool:

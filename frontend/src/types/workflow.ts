@@ -14,6 +14,7 @@ export const TONES = ["professional", "conversational", "inspirational", "analyt
 export type Tone = (typeof TONES)[number];
 
 export const AGENT_NAMES = [
+  "retriever",
   "researcher",
   "planner",
   "writer",
@@ -48,6 +49,40 @@ export interface Source {
   title: string;
   url: string;
   snippet: string;
+}
+
+/**
+ * How much the retrieval step established.
+ *
+ * `weak_evidence` means the sources do not clearly discuss the topic - never
+ * that a claim is false. `not_attempted` means retrieval did not run at all,
+ * which is a statement about configuration, not about the sources.
+ */
+export type RetrievalStatus =
+  | "retrieved"
+  | "weak_evidence"
+  | "no_evidence"
+  | "not_attempted";
+
+export interface EvidenceChunk {
+  /** Index into the run's `sources`. */
+  source_index: number;
+  /** Zero-based position within that source's page text. */
+  position: number;
+  /** Verbatim page text. Render as text, never as markup. */
+  text: string;
+  /** Cosine similarity to the retrieval query. */
+  similarity: number;
+}
+
+export interface EvidenceSet {
+  query: string;
+  status: RetrievalStatus;
+  /** Selected chunks, most relevant first. */
+  chunks: EvidenceChunk[];
+  documents_indexed: number;
+  chunks_indexed: number;
+  warnings: string[];
 }
 
 export interface ResearchFact {
@@ -186,6 +221,8 @@ export interface WorkflowRunResponse {
   research_facts: ResearchFact[];
   research_limitations: string[];
   sources: Source[];
+  /** Null on runs that predate retrieval. */
+  evidence: EvidenceSet | null;
   content_plan: ContentPlan | null;
   fact_check: FactCheckReport | null;
   agent_metrics: AgentMetric[];

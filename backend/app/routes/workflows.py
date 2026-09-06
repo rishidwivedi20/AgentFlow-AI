@@ -16,6 +16,7 @@ from app.schemas.workflow import (
 )
 from app.services.llm_service import build_llm_service
 from app.services.research_service import build_research_service
+from app.services.retrieval_service import build_optional_retrieval_service
 
 logger = logging.getLogger(__name__)
 
@@ -48,5 +49,6 @@ async def run(request: WorkflowRunRequest, settings: SettingsDep) -> WorkflowRun
         tone=request.tone,
         number_of_posts=request.number_of_posts,
         settings=settings,
+        retrieval=build_optional_retrieval_service(settings),
     )
     return build_workflow_response(state)

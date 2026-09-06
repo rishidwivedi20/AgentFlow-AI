@@ -4,7 +4,12 @@
  * The topology mirrors `build_workflow` in `backend/app/graph/workflow.py`,
  * maintained by hand like the type mirrors. The backend can describe its own
  * graph (LangGraph's `get_graph()`), so this could become an endpoint later;
- * for six fixed nodes a hand-kept copy is simpler and has no runtime cost.
+ * for seven fixed nodes a hand-kept copy is simpler and has no runtime cost.
+ *
+ * The Retriever is drawn because it is a real node that does real work - a
+ * search, then embedding and ranking, with latency and a quota of its own. It
+ * makes no LLM call, so it reports no tokens; that is a true fact about it, not
+ * a gap in the instrumentation.
  *
  * Node ids are `AgentName` values, which is what lets an event's `agent` field
  * address a node with no translation table.
@@ -27,40 +32,46 @@ const ROW_HEIGHT = 104;
 /** Executed top to bottom; the loop edges run back up the left-hand side. */
 export const AGENT_NODES: AgentNodeSpec[] = [
   {
+    id: "retriever",
+    label: "Retriever",
+    role: "Searches, then ranks page passages by relevance",
+    position: { x: COLUMN_X, y: 0 },
+  },
+  {
     id: "researcher",
     label: "Researcher",
-    role: "Searches the web and extracts cited facts",
-    position: { x: COLUMN_X, y: 0 },
+    role: "Extracts cited facts from the evidence",
+    position: { x: COLUMN_X, y: ROW_HEIGHT },
   },
   {
     id: "planner",
     label: "Planner",
     role: "Assigns each post a distinct angle",
-    position: { x: COLUMN_X, y: ROW_HEIGHT },
+    position: { x: COLUMN_X, y: ROW_HEIGHT * 2 },
   },
   {
     id: "writer",
     label: "Writer",
     role: "Drafts and revises the posts",
-    position: { x: COLUMN_X, y: ROW_HEIGHT * 2 },
+    position: { x: COLUMN_X, y: ROW_HEIGHT * 3 },
   },
   {
     id: "editor",
     label: "Editor",
     role: "Critiques quality; never rewrites",
-    position: { x: COLUMN_X, y: ROW_HEIGHT * 3 },
+    position: { x: COLUMN_X, y: ROW_HEIGHT * 4 },
   },
   {
     id: "fact_checker",
     label: "Fact Checker",
     role: "Verifies claims against the research",
-    position: { x: COLUMN_X, y: ROW_HEIGHT * 4 },
+    position: { x: COLUMN_X, y: ROW_HEIGHT * 5 },
   },
   {
     id: "finalize",
     label: "Final Output",
     role: "Selects the best draft and reports caveats",
-    position: { x: COLUMN_X, y: ROW_HEIGHT * 5 },
+    position: { x: COLUMN_X, y: ROW_HEIGHT * 6 },
   },
 ];
 
@@ -74,6 +85,7 @@ export interface WorkflowEdgeSpec {
 }
 
 export const WORKFLOW_EDGES: WorkflowEdgeSpec[] = [
+  { id: "retriever-researcher", source: "retriever", target: "researcher" },
   { id: "researcher-planner", source: "researcher", target: "planner" },
   { id: "planner-writer", source: "planner", target: "writer" },
   { id: "writer-editor", source: "writer", target: "editor" },

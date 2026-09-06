@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.models.research import Source
+from app.models.research import SearchResults
 
 # Marker placed in AgentFlowError.details by adapters when a failure is worth
 # retrying. Mirrors the LLM layer's convention so the two read alike.
@@ -28,8 +28,17 @@ class ResearchProvider(Protocol):
         """Short provider identifier, e.g. 'tavily'."""
         ...
 
-    async def search(self, query: str, *, max_results: int) -> list[Source]:
+    async def search(
+        self, query: str, *, max_results: int, include_page_text: bool = False
+    ) -> SearchResults:
         """Return real search results for ``query``.
+
+        ``include_page_text`` asks the provider for each result's full page
+        text, for retrieval to chunk and embed. It is a request, not a
+        guarantee: a provider that cannot extract a page simply returns no
+        document for it, and callers must cope with fewer documents than
+        sources. It is off by default because page text is typically 15x the
+        size of a snippet and may cost more provider credits.
 
         Implementations must raise:
 
@@ -37,7 +46,7 @@ class ResearchProvider(Protocol):
         * ``ResearchProviderError`` when the provider fails. Set
           ``details[RETRYABLE_DETAIL_KEY] = True`` only for transient faults.
 
-        An empty list is a valid result - a query can legitimately match
-        nothing - and is not an error.
+        Empty results are valid - a query can legitimately match nothing - and
+        are not an error.
         """
         ...

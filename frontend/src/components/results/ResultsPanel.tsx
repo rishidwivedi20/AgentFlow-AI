@@ -1,3 +1,4 @@
+import { EvidencePanel } from "@/components/results/EvidencePanel";
 import { FactCheckPanel } from "@/components/results/FactCheckPanel";
 import { MetricsPanel } from "@/components/results/MetricsPanel";
 import { PlanPanel } from "@/components/results/PlanPanel";
@@ -10,13 +11,16 @@ import type { WorkflowRunResponse } from "@/types/workflow";
 /**
  * Everything the run produced, behind tabs.
  *
- * Posts come first because they are the deliverable; research, plan, fact check
- * and metrics are the evidence behind them. Counts appear on the tabs so the
+ * Posts come first because they are the deliverable; research, evidence, plan,
+ * fact check and metrics are the support behind them. Evidence sits next to
+ * research because it is the layer underneath it - the source passages the
+ * facts were extracted from. Counts appear on the tabs so the
  * reader can see there are unsupported claims without opening the tab - the one
  * number that changes whether the posts are safe to use.
  */
 export function ResultsPanel({ result }: { result: WorkflowRunResponse }) {
   const criticalIssues = result.fact_check?.critical_issue_count ?? 0;
+  const evidenceCount = result.evidence?.chunks.length ?? 0;
 
   return (
     <Tabs defaultValue="posts" className="w-full">
@@ -31,6 +35,12 @@ export function ResultsPanel({ result }: { result: WorkflowRunResponse }) {
           Research
           {result.sources.length > 0 && (
             <span className="ml-1.5 text-muted-foreground">{result.sources.length}</span>
+          )}
+        </TabsTrigger>
+        <TabsTrigger value="evidence">
+          Evidence
+          {evidenceCount > 0 && (
+            <span className="ml-1.5 text-muted-foreground">{evidenceCount}</span>
           )}
         </TabsTrigger>
         <TabsTrigger value="plan">Plan &amp; review</TabsTrigger>
@@ -56,6 +66,10 @@ export function ResultsPanel({ result }: { result: WorkflowRunResponse }) {
           limitations={result.research_limitations}
           sources={result.sources}
         />
+      </TabsContent>
+
+      <TabsContent value="evidence" className="mt-6">
+        <EvidencePanel evidence={result.evidence} sources={result.sources} />
       </TabsContent>
 
       <TabsContent value="plan" className="mt-6">

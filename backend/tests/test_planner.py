@@ -137,7 +137,8 @@ async def test_search_failure_ends_the_run_without_writing(settings, run_kwargs)
     assert state["workflow_status"] is WorkflowStatus.FAILED
     assert state["final_output"] == []
     assert provider.writer_calls == 0, "nothing may be written without research"
-    assert state["errors"][0].agent is AgentName.RESEARCHER
+    # The Retriever owns the search since Phase 5.
+    assert state["errors"][0].agent is AgentName.RETRIEVER
 
 
 async def test_planner_failure_ends_the_run_without_writing(settings, run_kwargs):

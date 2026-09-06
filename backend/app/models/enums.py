@@ -39,6 +39,11 @@ class AgentName(StrEnum):
     cannot drift from the node names the graph actually registers.
     """
 
+    RETRIEVER = "retriever"
+    """Searches, fetches page text, and selects the passages most relevant to
+    the topic. Makes no LLM call, but has its own latency and quota, so it is
+    measured separately rather than folded into the Researcher's timing."""
+
     RESEARCHER = "researcher"
     PLANNER = "planner"
     WRITER = "writer"

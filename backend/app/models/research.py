@@ -12,6 +12,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from app.models.evidence import SourceDocument
+
 
 class StatementKind(StrEnum):
     """Whether a research statement is checkable or someone's view.
@@ -42,6 +44,26 @@ class Source(BaseModel):
     def domain(self) -> str:
         """Host portion of the URL, for display and de-duplication."""
         return self.url.host or ""
+
+
+class SearchResults(BaseModel):
+    """What one search returned: citable sources, plus their page text.
+
+    The two are kept apart rather than folded into ``Source`` because they have
+    different destinations. Sources are small and ship to the client; page text
+    is tens of thousands of characters per result and exists only to be chunked
+    and embedded. Putting it on ``Source`` would send it to the browser.
+
+    ``documents`` holds an entry only for results whose text the provider
+    actually returned, so it is usually shorter than ``sources``. Each entry's
+    ``source_index`` addresses ``sources`` by position.
+    """
+
+    sources: list[Source] = Field(default_factory=list)
+    documents: list[SourceDocument] = Field(
+        default_factory=list,
+        description="Full page text, for results where the provider supplied it.",
+    )
 
 
 class ResearchFact(BaseModel):
