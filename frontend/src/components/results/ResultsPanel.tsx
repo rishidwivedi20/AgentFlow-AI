@@ -86,6 +86,7 @@ export function ResultsPanel({ result }: { result: WorkflowRunResponse }) {
           errors={result.errors}
           revisionCount={result.revision_count}
           maxRevisions={result.max_revisions}
+          cost={result.cost ?? null}
         />
       </TabsContent>
     </Tabs>

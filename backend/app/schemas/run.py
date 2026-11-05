@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.workflow import WorkflowRunResponse
 from app.services.run_registry import RunState
+from app.services.run_store import RunSummary
 
 
 class RunAcceptedResponse(BaseModel):
@@ -54,3 +55,15 @@ class RunStatusResponse(BaseModel):
     error_message: str | None = Field(
         default=None, description="Client-safe explanation. Never a stack trace."
     )
+
+
+class RunHistoryResponse(BaseModel):
+    """A page of finished runs from the run store, newest first."""
+
+    history_enabled: bool = Field(
+        description="False when run history is switched off; the list is then always empty."
+    )
+    total: int = Field(ge=0, description="Finished runs stored in all.")
+    limit: int
+    offset: int
+    runs: list[RunSummary] = Field(default_factory=list)

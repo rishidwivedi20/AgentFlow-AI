@@ -12,11 +12,13 @@ conditional routing, feedback loops, observability, and evaluation.
 
 ## Status
 
-**Phase 5 (evidence retrieval) — complete.** A Retriever fetches and ranks
-real page passages; a Researcher grounded in that evidence, a Planner that
-assigns each post a distinct angle, and a Writer ↔ Editor ↔ Fact Checker loop
-sharing one hard revision budget run behind it. Runs stream live to a React
-Flow view of the graph. Gemini and Groq are both supported as LLM providers.
+**All seven phases complete.** A Retriever fetches and ranks real page
+passages; a Researcher grounded in that evidence, a Planner that assigns each
+post a distinct angle, and a Writer ↔ Editor ↔ Fact Checker loop sharing one
+hard revision budget run behind it. Runs stream live to a React Flow view of
+the graph, are kept in a run history with cross-run metrics and cost
+estimates, and the whole pipeline can be measured against a single-agent
+baseline. Gemini and Groq are both supported as LLM providers.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -25,18 +27,15 @@ Flow view of the graph. Gemini and Groq are both supported as LLM providers.
 | 3 | Real research, Content Planner, Fact Checker, source tracking | ✅ done |
 | 4 | SSE streaming, React Flow visualisation, live activity log, results panel | ✅ done |
 | 5 | Evidence retrieval: page fetch, chunking, embeddings, grounding guardrails | ✅ done |
-| 6 | Single-agent baseline vs multi-agent comparison | next |
-| 7 | Cost estimates, cross-run metrics, run history | planned |
-
-Per-agent latency and token usage are already recorded on every run and shown
-in the Metrics tab; Phase 7 adds what needs more than one run to compute.
+| 6 | Single-agent baseline vs multi-agent evaluation harness | ✅ done |
+| 7 | Cost estimates, run history, cross-run metrics | ✅ done |
 
 ## Stack
 
 **Backend** — Python 3.11, FastAPI, Pydantic v2, pydantic-settings, LangGraph
 **LLM / search** — Gemini or Groq for generation, Gemini embeddings, Tavily search
 **Frontend** — React 19, TypeScript 6, Vite 8, Tailwind CSS v4, shadcn/ui, React Flow
-**Database** — none by design in the MVP; the architecture keeps PostgreSQL a later, contained addition.
+**Storage** — SQLite (standard library) for run history; live runs stay in memory. Swapping in PostgreSQL touches `app/services/run_store.py` alone.
 
 ## Requirements
 
@@ -95,6 +94,54 @@ count and per-agent metrics. A run that executes but fails also returns 200,
 carrying `workflow_status` and structured `errors`; non-2xx is reserved for
 invalid input (422) and unusable configuration (503).
 
+Every result carries a `cost` estimate at list price (see
+[Cost estimates](#cost-estimates)).
+
+### Run history and metrics
+
+Runs started through the streaming API are written to SQLite
+(`backend/data/agentflow.db`) when they finish, events included. The UI's
+**History** page lists them and shows aggregates across all of them.
+
+- `GET /api/workflows?limit=50&offset=0` — finished runs, newest first
+- `GET /api/metrics/summary` — run outcomes, approval rate, mean quality,
+  revisions, duration, tokens and cost, plus per-agent execution counts,
+  failure rates, latency and tokens
+
+A finished run stays readable after the in-memory registry evicts it or the
+server restarts: `GET /api/workflows/{id}` and its event stream fall back to
+history, so the execution page replays the full graph. Averages of quality,
+revisions and approval count only runs that reached a verdict; a run that
+crashed is not scored as zero.
+
+### Evaluating against a single agent
+
+```powershell
+cd backend; .venv\Scripts\python.exe -m app.evaluation --limit 3
+```
+
+For each topic in `backend/evals/topics.json`, the multi-agent workflow runs
+as normal, then a single-agent baseline writes from the **same** sources and
+retrieved excerpts in one LLM call. Both outputs are scored the same way:
+
+- **Quality** — a neutral rubric judge (clarity, structure, engagement,
+  relevance, tone, distinctness, overall) that is not told which system wrote
+  the posts. It is deliberately not the workflow's Editor, which the
+  multi-agent output was revised to satisfy.
+- **Grounding** — the Fact Checker re-checks both outputs against the raw
+  search snippets and excerpts, not against either system's own notes.
+- **Cost** — LLM calls, tokens, generation latency and list-price cost,
+  excluding the shared search and the evaluators' own calls.
+
+Results go to `backend/evals/results/` as a Markdown report and the full JSON.
+Options: `--posts N`, `--tone`, `--topics FILE`, `--pause SECONDS` (default 20,
+to let per-minute quotas refill between topics), `--out DIR`.
+
+Each topic spends one Tavily search, a full workflow run, one baseline call
+and four evaluator calls. The judge is the same model as the systems under
+test and may favour its own style; treat small differences on a handful of
+topics as inconclusive.
+
 ### Tests
 
 ```powershell
@@ -136,10 +183,34 @@ validated `Settings` object.
 | `MAX_REVISIONS` | `3` | Hard cap on Writer ↔ Editor cycles |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-call provider timeout |
 | `LLM_MAX_RETRIES` | `2` | Retries on malformed structured output |
+| `LLM_INPUT_PRICE_PER_MTOK` | — | USD per million prompt tokens; overrides the price table |
+| `LLM_OUTPUT_PRICE_PER_MTOK` | — | USD per million output tokens; set both or neither |
+| `RUN_STORE_ENABLED` | `true` | Record finished runs for history and metrics |
+| `RUN_STORE_PATH` | `backend/data/agentflow.db` | SQLite file for run history |
 
 The server starts without any keys; `/api/health` then reports
 `llm_configured: false`. Running a workflow needs the key for the selected
 `LLM_PROVIDER` plus `TAVILY_API_KEY`.
+
+### Cost estimates
+
+Costs are estimates at list price, not a bill: on a free tier the real charge
+is zero. They answer what a run would cost on a paid plan, which is what makes
+the single-agent and multi-agent systems comparable in money as well as
+tokens. Reasoning tokens are priced as output, as both providers bill them.
+
+The built-in table in `backend/app/services/pricing.py` (checked 2026-11, from
+published third-party listings; verify against the provider before relying
+on it):
+
+| Model | Input $/M | Output $/M |
+|-------|-----------|------------|
+| `openai/gpt-oss-120b` (Groq) | 0.15 | 0.60 |
+| `gemini-3.6-flash` | 1.50 | 7.50 (standard rate; an introductory discount may apply) |
+
+Any other model is reported as unpriced rather than guessed at. Set
+`LLM_INPUT_PRICE_PER_MTOK` and `LLM_OUTPUT_PRICE_PER_MTOK` to price against
+your own rates.
 
 ### Secrets
 
@@ -187,6 +258,16 @@ accounting is what makes the Phase 6 evaluation possible at all.
 registered through `run_agent_with_metrics`, so timing, error capture and event
 emission cannot be forgotten by an individual agent.
 
+**The evaluation controls for luck.** Both systems write from one search, so a
+better result cannot come from a better set of sources. Neither evaluator knows
+which system it is scoring, and neither is a component of the system under
+test. A score an evaluator failed to produce is left out, never counted as
+zero.
+
+**History is an addition, never a dependency.** The in-memory registry is still
+the live path. If the SQLite file cannot be opened, runs carry on and history
+is simply off; a failed history write is logged, not surfaced as a failed run.
+
 ## Layout
 
 ```
@@ -195,13 +276,20 @@ backend/app/
   schemas/    HTTP request/response contracts
   models/     domain objects used inside graph state
   routes/     API endpoints
-  services/   LLM, embedding and search providers, retrieval, metrics, run registry
+  services/   LLM, embedding and search providers, retrieval, metrics, pricing,
+              run registry, run store
   agents/     agent implementations and their prompts
   graph/      LangGraph state, nodes, routing
+  evaluation/ single-agent baseline, blind judge, runner, report, CLI
+
+backend/evals/
+  topics.json the evaluation topic set
+  results/    evaluation reports (gitignored)
 
 frontend/src/
   components/ UI, including generated shadcn/ui primitives
   hooks/      data-fetching and SSE hooks
+  pages/      create, execution and history pages
   services/   typed API client
   types/      hand-maintained mirrors of backend schemas
 ```

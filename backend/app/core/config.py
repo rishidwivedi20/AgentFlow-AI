@@ -107,6 +107,19 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
 
+    # --- Cost estimation (Phase 7) ----------------------------------------
+    llm_input_price_per_mtok: float | None = Field(default=None, ge=0)
+    """USD per million prompt tokens. Overrides the built-in price table in
+    ``app.services.pricing``; both this and the output price must be set."""
+    llm_output_price_per_mtok: float | None = Field(default=None, ge=0)
+    """USD per million output tokens, reasoning included."""
+
+    # --- Run history (Phase 7) --------------------------------------------
+    run_store_enabled: bool = True
+    """Persist finished runs to SQLite so history and cross-run metrics
+    survive a restart and outlive the in-memory registry's retention."""
+    run_store_path: Path = BACKEND_DIR / "data" / "agentflow.db"
+
     @model_validator(mode="after")
     def _check_chunk_geometry(self) -> Settings:
         """Overlap must leave room for new content in every chunk.

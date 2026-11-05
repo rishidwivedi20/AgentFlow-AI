@@ -206,6 +206,30 @@ export interface WorkflowRunRequest {
   number_of_posts: number;
 }
 
+// --- cost, mirroring app/services/pricing.py ---------------------------------
+
+export interface ModelPricing {
+  model: string;
+  /** USD per million prompt tokens. */
+  input_per_mtok: number;
+  /** USD per million output tokens, reasoning included. */
+  output_per_mtok: number;
+  /** "settings" when overridden in backend/.env, else the price table's date. */
+  source: string;
+}
+
+/**
+ * Estimated cost at list price. On a free tier the actual charge is zero -
+ * this is what the same run would cost on a paid plan.
+ */
+export interface CostEstimate {
+  pricing: ModelPricing;
+  total_usd: number;
+  priced_calls: number;
+  /** LLM calls with no reported usage. Non-zero makes the total a lower bound. */
+  unpriced_calls: number;
+}
+
 export interface WorkflowRunResponse {
   workflow_status: WorkflowStatus;
   topic: string;
@@ -226,6 +250,8 @@ export interface WorkflowRunResponse {
   content_plan: ContentPlan | null;
   fact_check: FactCheckReport | null;
   agent_metrics: AgentMetric[];
+  /** List-price estimate of the run's LLM calls. Null when the model is unpriced. */
+  cost: CostEstimate | null;
   errors: WorkflowErrorRecord[];
   /**
    * Caveats to display alongside the output. Distinct from `errors`: nothing

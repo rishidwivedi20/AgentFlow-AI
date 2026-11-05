@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.evaluation.models import JudgeOutput
 from app.models.content import Post, WriterOutput
 from app.models.factcheck import FactCheckClaim, FactCheckReport
 from app.models.plan import ContentAngle, ContentPlan
@@ -29,6 +30,7 @@ LLM_FACING_MODELS = [
     ContentAngle,
     FactCheckReport,
     FactCheckClaim,
+    JudgeOutput,
 ]
 
 

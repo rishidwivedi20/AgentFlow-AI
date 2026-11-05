@@ -15,6 +15,7 @@ from app.schemas.workflow import (
     build_workflow_response,
 )
 from app.services.llm_service import build_llm_service
+from app.services.pricing import resolve_pricing
 from app.services.research_service import build_research_service
 from app.services.retrieval_service import build_optional_retrieval_service
 
@@ -51,4 +52,4 @@ async def run(request: WorkflowRunRequest, settings: SettingsDep) -> WorkflowRun
         settings=settings,
         retrieval=build_optional_retrieval_service(settings),
     )
-    return build_workflow_response(state)
+    return build_workflow_response(state, resolve_pricing(settings))

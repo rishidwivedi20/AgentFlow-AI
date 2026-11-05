@@ -1,5 +1,6 @@
 import { ApiError, type ApiErrorBody } from "@/types/api";
 import type { HealthResponse } from "@/types/health";
+import type { MetricsSummaryResponse, RunHistoryResponse } from "@/types/history";
 import type { RunAcceptedResponse, RunStatusResponse } from "@/types/run";
 import type { WorkflowRunRequest } from "@/types/workflow";
 
@@ -91,6 +92,17 @@ export function createRun(body: WorkflowRunRequest): Promise<RunAcceptedResponse
  */
 export function getRun(runId: string): Promise<RunStatusResponse> {
   return request<RunStatusResponse>(`/api/workflows/${encodeURIComponent(runId)}`);
+}
+
+/** Finished runs from the backend's history, newest first. */
+export function listRuns(limit = 25, offset = 0): Promise<RunHistoryResponse> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request<RunHistoryResponse>(`/api/workflows?${query.toString()}`);
+}
+
+/** Outcome, cost and per-agent aggregates across every stored run. */
+export function getMetricsSummary(): Promise<MetricsSummaryResponse> {
+  return request<MetricsSummaryResponse>("/api/metrics/summary");
 }
 
 /**

@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link, NavLink } from "react-router";
 
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useHealth } from "@/hooks/useHealth";
@@ -8,6 +8,11 @@ const CONNECTION_LABELS = {
   connected: "Backend connected",
   unreachable: "Backend unreachable",
 } as const;
+
+const NAV_LINKS = [
+  { to: "/", label: "New run" },
+  { to: "/history", label: "History" },
+] as const;
 
 /**
  * Application header.
@@ -28,7 +33,25 @@ export function AppHeader() {
             multi-agent content generation
           </span>
         </Link>
-        <ConnectionBadge state={state} label={CONNECTION_LABELS[state]} />
+        <div className="flex items-center gap-5">
+          <nav className="flex items-center gap-4 text-sm">
+            {NAV_LINKS.map(({ to, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end
+                className={({ isActive }) =>
+                  isActive
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground transition-colors hover:text-foreground"
+                }
+              >
+                {label}
+              </NavLink>
+            ))}
+          </nav>
+          <ConnectionBadge state={state} label={CONNECTION_LABELS[state]} />
+        </div>
       </div>
     </header>
   );

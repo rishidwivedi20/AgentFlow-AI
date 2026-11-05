@@ -16,6 +16,7 @@ from collections.abc import Iterator, Sequence
 import pytest
 
 from app.core.config import Settings
+from app.evaluation.models import JudgeOutput
 from app.models.content import Post, WriterOutput
 from app.models.enums import Platform, Tone
 from app.models.evidence import SourceDocument
@@ -147,6 +148,19 @@ def make_fact_check(*, unsupported: int = 0, verified: int = 1) -> FactCheckRepo
     return FactCheckReport(claims=claims)
 
 
+def make_judge(overall: float = 7.0) -> JudgeOutput:
+    return JudgeOutput(
+        clarity=overall,
+        structure=overall,
+        engagement=overall,
+        relevance=overall,
+        tone_consistency=overall,
+        distinctness=overall,
+        overall=overall,
+        rationale="Clear and on topic.",
+    )
+
+
 def make_usage() -> TokenUsage:
     return TokenUsage(prompt_tokens=100, output_tokens=200, thought_tokens=50, total_tokens=350)
 
@@ -262,7 +276,10 @@ class StubProvider:
         post_count: int = 2,
         angle_count: int = 2,
         fail_on: Sequence[str] = (),
+        judge_scores: Sequence[float] = (7.0,),
     ) -> None:
+        self._judge_scores = list(judge_scores)
+        self.judge_calls = 0
         self._verdicts = list(verdicts or [make_verdict(approved=True, score=9.0)])
         self._fact_checks = list(fact_checks or [make_fact_check()])
         self._post_count = post_count
@@ -308,6 +325,12 @@ class StubProvider:
             return self._result(
                 WriterOutput(posts=make_posts(self._post_count, tag=f"r{self.writer_calls}"))
             )
+
+        if schema is JudgeOutput:
+            self.judge_calls += 1
+            self._record("judge", kwargs)
+            self._maybe_fail("judge")
+            return self._result(make_judge(self._pick(self._judge_scores, self.judge_calls - 1)))
 
         if schema is FactCheckReport:
             self.fact_check_calls += 1
@@ -436,3 +459,19 @@ def _clear_settings_cache() -> Iterator[None]:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_run_store(tmp_path, monkeypatch) -> Iterator[None]:
+    """Point run history at a throwaway database for every test.
+
+    Settings constructed in a test read unspecified fields from the
+    environment, so setting the variable here reaches all of them - without it
+    any test that completes a run would write to the real history file.
+    """
+    from app.services.run_store import reset_run_stores
+
+    monkeypatch.setenv("RUN_STORE_PATH", str(tmp_path / "runs.db"))
+    reset_run_stores()
+    yield
+    reset_run_stores()

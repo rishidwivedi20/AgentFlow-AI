@@ -19,6 +19,7 @@ from app.models.metrics import AgentMetric
 from app.models.plan import ContentPlan
 from app.models.research import ResearchFact, Source
 from app.models.review import EditorOutput
+from app.services.pricing import CostEstimate, ModelPricing, estimate_run_cost
 
 MIN_POSTS = 1
 MAX_POSTS = 5
@@ -106,6 +107,13 @@ class WorkflowRunResponse(BaseModel):
         default=None, description="Verdicts on the final draft's factual claims."
     )
     agent_metrics: list[AgentMetric] = Field(description="One entry per agent execution.")
+    cost: CostEstimate | None = Field(
+        default=None,
+        description=(
+            "Estimated list-price cost of the run's LLM calls. None when the model "
+            "has no known price. On a free tier the actual charge is zero."
+        ),
+    )
     errors: list[WorkflowErrorRecord] = Field(
         description="Client-safe failure records. Non-empty does not always mean failure."
     )
@@ -119,8 +127,14 @@ class WorkflowRunResponse(BaseModel):
     )
 
 
-def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
-    """Project final graph state onto the API contract."""
+def build_workflow_response(
+    state: WorkflowState, pricing: ModelPricing | None = None
+) -> WorkflowRunResponse:
+    """Project final graph state onto the API contract.
+
+    ``pricing`` is resolved by the caller, which knows the configured model;
+    graph state does not record one.
+    """
     best = select_best_draft(state)
     research = state["research"]
     return WorkflowRunResponse(
@@ -145,6 +159,7 @@ def build_workflow_response(state: WorkflowState) -> WorkflowRunResponse:
         content_plan=state["content_plan"],
         fact_check=state["fact_check"],
         agent_metrics=state["agent_metrics"],
+        cost=estimate_run_cost(state["agent_metrics"], pricing),
         errors=state["errors"],
         warnings=state["warnings"],
     )
