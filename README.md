@@ -12,25 +12,30 @@ conditional routing, feedback loops, observability, and evaluation.
 
 ## Status
 
-**Phase 3 (full agent pipeline) — complete.** Five agents run behind
-`POST /api/workflows/run`: a Researcher grounded in real web search, a Planner
-that assigns each post a distinct angle, and a Writer ↔ Editor ↔ Fact Checker
-loop sharing one hard revision budget. Verified end to end against the live
-Gemini and Tavily APIs.
+**Phase 5 (evidence retrieval) — complete.** A Retriever fetches and ranks
+real page passages; a Researcher grounded in that evidence, a Planner that
+assigns each post a distinct angle, and a Writer ↔ Editor ↔ Fact Checker loop
+sharing one hard revision budget run behind it. Runs stream live to a React
+Flow view of the graph. Gemini and Groq are both supported as LLM providers.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | 1 | FastAPI + React foundation, config, health check | ✅ done |
 | 2 | LangGraph MVP: Writer ↔ Editor loop, max 3 revisions | ✅ done |
 | 3 | Real research, Content Planner, Fact Checker, source tracking | ✅ done |
-| 4 | SSE streaming, React Flow visualisation, live activity log | next |
-| 5 | Latency, token usage, revision and workflow metrics | planned |
-| 6 | Single-agent baseline vs multi-agent comparison | planned |
+| 4 | SSE streaming, React Flow visualisation, live activity log, results panel | ✅ done |
+| 5 | Evidence retrieval: page fetch, chunking, embeddings, grounding guardrails | ✅ done |
+| 6 | Single-agent baseline vs multi-agent comparison | next |
+| 7 | Cost estimates, cross-run metrics, run history | planned |
+
+Per-agent latency and token usage are already recorded on every run and shown
+in the Metrics tab; Phase 7 adds what needs more than one run to compute.
 
 ## Stack
 
-**Backend** — Python 3.11, FastAPI, Pydantic v2, pydantic-settings, LangGraph (Phase 2+)
-**Frontend** — React 19, TypeScript 6, Vite 8, Tailwind CSS v4, shadcn/ui, React Flow (Phase 4)
+**Backend** — Python 3.11, FastAPI, Pydantic v2, pydantic-settings, LangGraph
+**LLM / search** — Gemini or Groq for generation, Gemini embeddings, Tavily search
+**Frontend** — React 19, TypeScript 6, Vite 8, Tailwind CSS v4, shadcn/ui, React Flow
 **Database** — none by design in the MVP; the architecture keeps PostgreSQL a later, contained addition.
 
 ## Requirements
@@ -79,6 +84,12 @@ curl -X POST http://localhost:8000/api/workflows/run `
   -d '{"topic":"How AI is changing software engineering","platform":"linkedin","tone":"professional","number_of_posts":2}'
 ```
 
+This synchronous endpoint blocks until the run finishes. The UI instead uses
+the streaming API: `POST /api/workflows` queues a run and returns its id,
+`GET /api/workflows/{id}/events` streams execution events over SSE (replaying
+any the client missed), and `GET /api/workflows/{id}` returns the state and,
+once finished, the result.
+
 Returns HTTP 200 with the generated posts, the Editor's verdict, the revision
 count and per-agent metrics. A run that executes but fails also returns 200,
 carrying `workflow_status` and structured `errors`; non-2xx is reserved for
@@ -90,7 +101,7 @@ invalid input (422) and unusable configuration (503).
 cd backend; .venv\Scripts\python.exe -m pytest tests/
 ```
 
-314 tests, no network calls and no API key required - the LLM and search
+442 tests, no network calls and no API key required - the LLM and search
 providers are stubbed throughout.
 
 ## Configuration
@@ -112,13 +123,23 @@ validated `Settings` object.
 | `GROQ_MAX_COMPLETION_TOKENS` | `4096` | Prompt + this cap must stay under Groq's 8,000 tokens/minute |
 | `TAVILY_API_KEY` | — | [app.tavily.com](https://app.tavily.com), 1,000 free credits/month, no card |
 | `TAVILY_MAX_RESULTS` | `5` | Sources fetched per run |
-| `GROQ_API_KEY` | — | [console.groq.com](https://console.groq.com), free tier |
+| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` or `advanced` |
+| `RETRIEVAL_ENABLED` | `true` | Off falls back to search snippets; needs `GEMINI_API_KEY` even with Groq |
+| `EMBEDDING_MODEL` | `gemini-embedding-001` | Always Gemini: Groq has no embeddings API |
+| `EMBEDDING_DIMENSIONS` | `768` | Truncated from the native 3072 |
+| `RETRIEVAL_CHUNK_SIZE` | `1200` | Characters per chunk (~300 tokens) |
+| `RETRIEVAL_CHUNK_OVERLAP` | `150` | Must be smaller than the chunk size |
+| `RETRIEVAL_TOP_K` | `8` | Passages handed to the agents |
+| `RETRIEVAL_MIN_SIMILARITY` | `0.5` | Below this a passage is treated as off-topic |
+| `RETRIEVAL_MAX_CHUNKS_PER_SOURCE` | `3` | Stops one page filling the evidence budget |
+| `RETRIEVAL_MAX_CHUNKS_PER_RUN` | `90` | Embedding cap per run; free tier allows 100 passages/minute |
 | `MAX_REVISIONS` | `3` | Hard cap on Writer ↔ Editor cycles |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-call provider timeout |
 | `LLM_MAX_RETRIES` | `2` | Retries on malformed structured output |
 
-No provider key is required for Phase 1; `/api/health` reports
-`llm_configured: false`, which is the expected state.
+The server starts without any keys; `/api/health` then reports
+`llm_configured: false`. Running a workflow needs the key for the selected
+`LLM_PROVIDER` plus `TAVILY_API_KEY`.
 
 ### Secrets
 
@@ -174,9 +195,9 @@ backend/app/
   schemas/    HTTP request/response contracts
   models/     domain objects used inside graph state
   routes/     API endpoints
-  services/   LLM abstraction, metrics, run registry
-  agents/     agent implementations (Phase 2+)
-  graph/      LangGraph state, nodes, routing (Phase 2+)
+  services/   LLM, embedding and search providers, retrieval, metrics, run registry
+  agents/     agent implementations and their prompts
+  graph/      LangGraph state, nodes, routing
 
 frontend/src/
   components/ UI, including generated shadcn/ui primitives
